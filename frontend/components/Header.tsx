@@ -6,8 +6,8 @@ export default function Header({ q, onSearch }:{ q:string; onSearch:(s:string)=>
       <div className="container-pg flex items-center gap-4 py-4">
         <div className="flex items-center gap-3">
           <div className="h-9 w-9 rounded-xl bg-brand-600 grid place-items-center text-white font-bold">P</div>
-          <div className="text-lg font-semibold">PaperScope</div>
-          <span className="ml-2 text-sm text-gray-500">AI推论文档平台（Demo）</span>
+          <div className="text-lg font-semibold">uPaper</div>
+          <span className="ml-2 text-sm text-gray-500">AI学术论文平台</span>
         </div>
         <div className="ml-auto flex items-center gap-3 w-full sm:w-[520px]">
           <div className="relative flex-1">

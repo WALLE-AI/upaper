@@ -69,5 +69,5 @@ def _random_item(i: int) -> dict:
 # 生成更多样本，便于分页
 ALL_PAPERS: List[Dict] = []
 ALL_PAPERS.extend(BASE_ITEMS)
-for i in range(5, 80):  # 79 条
+for i in range(5, 10):  # 79 条
     ALL_PAPERS.append(_random_item(i))

@@ -1,4 +1,4 @@
-# PaperScope Next (REST API 版)
+# uPaper (REST API 版)
 
 ## 使用
 1. 复制 `.env.local.example` 为 `.env.local` 并设置：

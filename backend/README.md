@@ -1,4 +1,4 @@
-# PaperScope FastAPI Backend
+# uPaper FastAPI Backend
 
 一个可直接联调的 FastAPI 后端，提供 `GET /papers` 接口，支持搜索、来源与标签过滤、分页。
 前端（Next.js 项目）把请求发到自己的 `/api/papers` 代理，再由代理转发到此后端。

@@ -4,7 +4,7 @@ import { Inter } from "next/font/google";
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 export const metadata: Metadata = {
-  title: "PaperScope • 论文发现平台（Demo）",
+  title: "uPaper • 学术论文平台",
   description: "A Tailwind + Next.js recreation of a paper discovery UI."
 };
 
