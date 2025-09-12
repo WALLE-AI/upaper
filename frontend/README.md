@@ -1,40 +1,25 @@
-# PaperScope Next (Demo)
+# PaperScope Next (REST API 版)
 
-A minimal Next.js 14 + Tailwind CSS project that recreates a paper discovery UI similar to the screenshot you provided.
-
-## Quick Start
-
-```bash
-# 1) Install deps
-pnpm i   # or: npm i  /  yarn
-
-# 2) Dev
-pnpm dev # http://localhost:3000
-
-# 3) Build & Start
-pnpm build && pnpm start
+## 使用
+1. 复制 `.env.local.example` 为 `.env.local` 并设置：
 ```
-
-## Stack
-
-- Next.js 14 (App Router, TypeScript)
-- Tailwind CSS
-- lucide-react icons
-
-## Structure
-
+API_BASE_URL=https://your-backend.example.com
+# API_TOKEN=xxxx
 ```
-app/
-  layout.tsx     # Global shell
-  page.tsx       # Main paper list page (client-side filters/search)
-  globals.css
-components/
-  Header.tsx
-  SidebarFilters.tsx
-  PaperCard.tsx
-  Badge.tsx
-lib/
-  data.ts        # Mock data & taxonomy
-```
+2. 安装依赖：`npm i`
+3. 开发：`npm run dev`  → http://localhost:3000
 
-This is a static demo without backend; you can wire it to your API later.
+## 数据流
+前端页面 -> `/api/papers` (Next.js 代理) -> `${API_BASE_URL}/papers` (你的后端)
+
+### 查询参数（前端 -> 后端）
+- `search`: string
+- `sources`: 逗号分隔，如 `HF,arXiv`
+- `tags`: 逗号分隔
+- `page`: 页码（默认 1） → 转发为 `page`
+- `pageSize`: 每页数量（默认 20） → 转发为 `page_size`
+
+### 后端响应结构示例
+```json
+{ "items": [ { "id":"p1", "title":"...", "summary":"...", "source":"HF", "likes":100, "comments":2, "tags":["Agent"] } ], "total": 63 }
+```
