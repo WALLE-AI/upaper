@@ -2,11 +2,13 @@ from __future__ import annotations
 from fastapi import FastAPI, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, List
-from .models import Paper, PaperListResp
-from .data import ALL_PAPERS
+
+from app.models import Paper, PaperListResp
 
 import os
 from dotenv import load_dotenv
+
+from app.data import get_hf_daily_papers
 load_dotenv()
 
 app = FastAPI(title="PaperScope Backend", version="1.0.0")
@@ -34,7 +36,7 @@ def list_papers(
     page_size: int = Query(20, ge=1, le=100, description="每页条数")
 ):
     # 1) 数据准备
-    data = ALL_PAPERS
+    data = get_hf_daily_papers()
 
     # 2) 搜索过滤（标题或摘要）
     if search:

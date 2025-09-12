@@ -4,6 +4,7 @@ from typing import List
 from bs4 import BeautifulSoup
 import requests
 
+
 def get_hugging_face_top_daily_paper() -> List:
     """
     This is a tool that returns the most upvoted paper on Hugging Face daily papers.
@@ -29,7 +30,7 @@ def get_hugging_face_top_daily_paper() -> List:
                   if 'dailyPapers' in json_data:
                     #   top_paper = json_data['dailyPapers'][0]['title']
                       for top_paper in json_data['dailyPapers']:
-                          top_paper_list.append(top_paper['paper']['id'])
+                          top_paper_list.append(top_paper['paper'])
               except json.JSONDecodeError:
                   continue
       print("top paper list:",top_paper_list)

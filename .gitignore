@@ -29,6 +29,7 @@ develop-eggs/
 dist/
 downloads/
 eggs/
+frontend/.next
 .eggs/
 lib64/
 parts/
