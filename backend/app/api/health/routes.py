@@ -14,7 +14,6 @@ bp = Blueprint("health", __name__)
 def alive():
     return ok({"status": "ok"})
 
-
 @bp.get("/supabase")
 def supabase_status():
     return ok({

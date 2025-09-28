@@ -55,20 +55,20 @@ class PaperRepositorySupabase:
             "month_url": data.month_url,
             "source_url": data.source_url,
             "huggingface_url": data.huggingface_url,
-            "date_str": data.date_str,
+            "date": data.date_str,
             "paper_id": data.paper_id,
             "votes": data.votes,
             "ai_keywords": data.ai_keywords or [],
             "ai_summary": data.ai_summary or "",
             "meta": data.meta or {},
         }
-        res = self.table.insert(row).select("*").execute()
+        res = self.table.insert(row).execute()
         created = (res.data or [])[0]
         return _row_to_dc(created)
 
     def update(self, paper_uuid: str, **fields) -> Optional[Paper]:
         allowed = {
-            "title", "month_url", "source_url", "huggingface_url", "date_str",
+            "title", "month_url", "source_url", "huggingface_url", "date",
             "paper_id", "votes", "ai_keywords", "ai_summary", "meta"
         }
         body = {k: v for k, v in fields.items() if k in allowed}

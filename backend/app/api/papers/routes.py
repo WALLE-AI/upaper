@@ -1,9 +1,12 @@
 """Papers blueprint (CRUD)."""
 from __future__ import annotations
 
+from typing import List
 import uuid
 from flask import Blueprint, request
 from sqlalchemy.orm import Session
+
+from ...utils.get_hf_papers import get_hugging_face_top_daily_paper
 
 from ...db.session import db
 from ...errors import ok
@@ -50,6 +53,68 @@ def create_paper():
     )
     created = svc.create_paper(p)
     return ok(PaperOut.model_validate(asdict(p)).model_dump(), 201)
+
+
+def maybe_make_paper(item: dict) -> Paper | None:
+    p = item if isinstance(item, dict) else None
+    if not isinstance(p, dict):
+        return
+    title = p.get("title") or p.get("name") or ""
+    if not title:
+        return
+    paper_id = p.get("id") or p.get("_id")
+    votes = p.get("upvotes") or p.get("upvotes") or None
+    source_url = p.get("url") or p.get("sourceUrl") or p.get("arxivUrl")
+    hf_url = p.get("slug")
+
+    date_str = p.get("publishedAt")
+    ai_keywords=p.get("ai_keywords") or []
+    ai_summary=p.get("ai_summary") or ""    
+    return Paper(
+        id=str(uuid.uuid4()),
+        title=title,
+        source_url=source_url,
+        huggingface_url=hf_url,
+        date_str=date_str,
+        ai_keywords=ai_keywords,
+        ai_summary=ai_summary,
+        paper_id=str(paper_id) if p.get("id") or p.get("_id") is not None else None,
+        votes=int(votes) if isinstance(votes, int) else None,
+        month_url="",
+        meta=p
+    )
+
+@bp.get("/daily/paper_daily")
+def get_daily_paper():
+    """
+    Fetch the top huggingface daily papers for a given daily identifier and create new Paper entries.
+
+    Path parameter:
+      - paper_daily: an identifier for the daily list (e.g. "2025-09-28" or "2025-09")
+    """
+    # 1) call your HF fetcher (must return iterable of dict-like meta)
+    paper_list = get_hugging_face_top_daily_paper()  # <-- pass the param if needed
+
+    svc = _service()
+    created_items: List[dict] = []
+
+    for paper_meta in paper_list:
+        paper_id = paper_meta.get("id") or paper_meta.get("_id")
+        if not paper_id:
+            continue
+
+        # 先检查是否存在（按外部 paper_id）
+        existing = svc.get_by_paper_id(str(paper_id))
+        if existing:
+            continue
+
+        p = maybe_make_paper(paper_meta)
+        if not p:
+            continue
+        print("Creating paper:", p.title)
+        created = svc.create_paper(p)
+        created_items.append(PaperOut.model_validate(asdict(created)).model_dump())
+    return ok(len(created_items), 201 if created_items else 200)
 
 
 @bp.get("/<paper_uuid>")

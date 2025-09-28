@@ -31,3 +31,13 @@ def create_app(config_class: type[BaseConfig] | None = None) -> Flask:
     # Global error handlers
     register_error_handlers(app)
     return app
+
+# def list_routes():
+#     routes = []
+#     for rule in create_app.url_map.iter_rules():
+#         routes.append({
+#             'endpoint': rule.endpoint,
+#             'methods': list(rule.methods),
+#             'path': str(rule)
+#         })
+#     print(routes)

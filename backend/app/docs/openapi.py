@@ -76,6 +76,47 @@ def build_openapi() -> Dict[str, Any]:
                 "parameters": [{"name": "paper_id", "in": "path", "required": True, "schema": {"type": "string"}}],
                 "get": {"tags": ["Papers"], "summary": "Get paper by external paper_id", "responses": {"200": {"description": "OK"}}}
             },
+            "/api/papers/daily/paper_daily": {
+                "get": {
+                    "tags": ["Papers"],
+                    "summary": "Fetch daily papers from HuggingFace and create new Paper records (idempotent).",
+                    "responses": {
+                        "200": {
+                            "description": "List of created papers or empty list",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "data": {
+                                                "type": "array",
+                                                "items": {"$ref": "#/components/schemas/PaperOut"}
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "201": {
+                            "description": "Created",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "data": {
+                                                "type": "array",
+                                                "items": {"$ref": "#/components/schemas/PaperOut"}
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+
         },
         "components": {
             "schemas": _schemas(),

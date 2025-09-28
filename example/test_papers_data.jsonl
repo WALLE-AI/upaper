@@ -1,0 +1,144 @@
+{
+  "id": "2412.12606",
+  "title": "Multi-Dimensional Insights: Benchmarking Real-World Personalization in\n  Large Multimodal Models",
+  "authors": [
+    {
+      "_id": "676240aeb57a82f47d1a81f2",
+      "name": "YiFan Zhang",
+      "hidden": false
+    },
+    {
+      "_id": "676240aeb57a82f47d1a81f3",
+      "name": "Shanglin Lei",
+      "hidden": false
+    },
+    {
+      "_id": "676240aeb57a82f47d1a81f4",
+      "name": "Runqi Qiao",
+      "user": {
+        "_id": "6683a05e74fb1736a4b7c934",
+        "type": "user",
+        "user": "RichardQRQ",
+        "isPro": false,
+        "fullname": "QRQ",
+        "avatarUrl": "https://cdn-avatars.huggingface.co/v1/production/uploads/6683a05e74fb1736a4b7c934/eiz6qlqIUjAWGy5zfg8Cs.jpeg"
+      },
+      "hidden": false,
+      "status": "claimed_verified",
+      "statusLastChangedAt": "2024-12-19T18:03:40.564Z"
+    },
+    {
+      "_id": "676240aeb57a82f47d1a81f5",
+      "name": "Zhuoma GongQue",
+      "user": {
+        "_id": "6762b973686e574cab4717ec",
+        "type": "user",
+        "user": "Ethereal1l",
+        "isPro": false,
+        "fullname": "zhuoma",
+        "avatarUrl": "https://cdn-avatars.huggingface.co/v1/production/uploads/no-auth/icacS5LkbX2S46b3Dqbni.png"
+      },
+      "hidden": false,
+      "status": "claimed_verified",
+      "statusLastChangedAt": "2024-12-20T08:33:43.390Z"
+    },
+    {
+      "_id": "676240aeb57a82f47d1a81f6",
+      "name": "Xiaoshuai Song",
+      "hidden": false
+    },
+    {
+      "_id": "676240aeb57a82f47d1a81f7",
+      "name": "Guanting Dong",
+      "user": {
+        "_id": "61cd4b833dd34ba1985e0753",
+        "type": "user",
+        "user": "dongguanting",
+        "isPro": false,
+        "fullname": "KABI",
+        "avatarUrl": "https://cdn-avatars.huggingface.co/v1/production/uploads/61cd4b833dd34ba1985e0753/BfHfrwotoMESpXZOHiIe4.png"
+      },
+      "hidden": false,
+      "status": "admin_assigned",
+      "statusLastChangedAt": "2024-12-18T12:53:40.027Z"
+    },
+    {
+      "_id": "676240aeb57a82f47d1a81f8",
+      "name": "Qiuna Tan",
+      "user": {
+        "_id": "66615dd1c8bbe034b4b82029",
+        "type": "user",
+        "user": "zhangyifan666",
+        "isPro": false,
+        "fullname": "Zhang YiFan",
+        "avatarUrl": "/avatars/7ef1ddf2fa356efbeb2b3aa12284a1f0.svg"
+      },
+      "hidden": false,
+      "status": "claimed_verified",
+      "statusLastChangedAt": "2024-12-18T14:32:33.953Z"
+    },
+    {
+      "_id": "676240aeb57a82f47d1a81f9",
+      "name": "Zhe Wei",
+      "hidden": false
+    },
+    {
+      "_id": "676240aeb57a82f47d1a81fa",
+      "name": "Peiqing Yang",
+      "hidden": false
+    },
+    {
+      "_id": "676240aeb57a82f47d1a81fb",
+      "name": "Ye Tian",
+      "hidden": false
+    },
+    {
+      "_id": "676240aeb57a82f47d1a81fc",
+      "name": "Yadong Xue",
+      "user": {
+        "_id": "64d4b5808b65d477e68f2fba",
+        "type": "user",
+        "user": "ataraxy3",
+        "isPro": false,
+        "fullname": "Xue Yadong",
+        "avatarUrl": "https://cdn-avatars.huggingface.co/v1/production/uploads/noauth/upUtVjLXZ9lAulngeFh_i.jpeg"
+      },
+      "hidden": true,
+      "status": "admin_assigned",
+      "statusLastChangedAt": "2024-12-18T12:52:43.539Z"
+    },
+    {
+      "_id": "676240aeb57a82f47d1a81fd",
+      "name": "Xiaofei Wang",
+      "hidden": false
+    },
+    {
+      "_id": "676240aeb57a82f47d1a81fe",
+      "name": "Honggang Zhang",
+      "hidden": false
+    }
+  ],
+  "summary": "The rapidly developing field of large multimodal models (LMMs) has led to the\nemergence of diverse models with remarkable capabilities. However, existing\nbenchmarks fail to comprehensively, objectively and accurately evaluate whether\nLMMs align with the diverse needs of humans in real-world scenarios. To bridge\nthis gap, we propose the Multi-Dimensional Insights (MDI) benchmark, which\nincludes over 500 images covering six common scenarios of human life. Notably,\nthe MDI-Benchmark offers two significant advantages over existing evaluations:\n(1) Each image is accompanied by two types of questions: simple questions to\nassess the model's understanding of the image, and complex questions to\nevaluate the model's ability to analyze and reason beyond basic content. (2)\nRecognizing that people of different age groups have varying needs and\nperspectives when faced with the same scenario, our benchmark stratifies\nquestions into three age categories: young people, middle-aged people, and\nolder people. This design allows for a detailed assessment of LMMs'\ncapabilities in meeting the preferences and needs of different age groups. With\nMDI-Benchmark, the strong model like GPT-4o achieve 79% accuracy on age-related\ntasks, indicating that existing LMMs still have considerable room for\nimprovement in addressing real-world applications. Looking ahead, we anticipate\nthat the MDI-Benchmark will open new pathways for aligning real-world\npersonalization in LMMs. The MDI-Benchmark data and evaluation code are\navailable at https://mdi-benchmark.github.io/",
+  "upvotes": 41,
+  "ai_summary": "The Multi-Dimensional Insights (MDI) benchmark evaluates large multimodal models across different scenarios and age groups to assess their real-world applicability, revealing areas for improvement in personalization.",
+  "ai_keywords": [
+    "large multimodal models",
+    "LMMs",
+    "Multi-Dimensional Insights",
+    "MDI benchmark",
+    "complex questions",
+    "age categories",
+    "GPT-4o"
+  ],
+  "publishedAt": "2024-12-17T07:06:10.000Z",
+  "discussionId": "676240b0b57a82f47d1a8254",
+  "submittedOnDailyAt": "2024-12-18T01:20:03.244Z",
+  "submittedOnDailyBy": {
+    "_id": "6683a05e74fb1736a4b7c934",
+    "type": "user",
+    "user": "RichardQRQ",
+    "isPro": false,
+    "fullname": "QRQ",
+    "avatarUrl": "https://cdn-avatars.huggingface.co/v1/production/uploads/6683a05e74fb1736a4b7c934/eiz6qlqIUjAWGy5zfg8Cs.jpeg"
+  }
+}

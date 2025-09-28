@@ -33,7 +33,7 @@ def get_hugging_face_top_daily_paper() -> List:
                           top_paper_list.append(top_paper['paper'])
               except json.JSONDecodeError:
                   continue
-      print("top paper list:",top_paper_list)
+      print("top paper list:",len(top_paper_list))
     #   with open("top_daily_paper_list.jsonl", "w", encoding="utf-8") as f:
     #         f.write(json.dumps(top_paper_list,ensure_ascii=False,indent=4))
       return top_paper_list
