@@ -46,6 +46,7 @@ class PaperRepository:
         m = self.session.scalars(stmt).first()
         return _to_dc(m) if m else None
 
+
     def create(self, data: Paper) -> Paper:
         mid = data.id or str(uuid.uuid4())
         m = PaperModel(

@@ -24,6 +24,9 @@ class PaperService:
 
     def get_by_paper_id(self, paper_id: str) -> Optional[Paper]:
         return self.repo.get_by_paper_id(paper_id)
+    
+    def get_by_paper_month(self, month: str) -> Optional[Paper]:
+        return self.repo.get_by_paper_month(month)
 
     def update_paper(self, paper_uuid: str, **fields) -> Optional[Paper]:
         if "ai_keywords" in fields and fields["ai_keywords"] is None:

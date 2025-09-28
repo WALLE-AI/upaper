@@ -47,6 +47,13 @@ class PaperRepositorySupabase:
         res = self.table.select("*").eq("paper_id", paper_id).limit(1).execute()
         rows = res.data or []
         return _row_to_dc(rows[0]) if rows else None
+    
+    
+    def get_by_paper_month(self, month: str) -> Optional[Paper]:
+        year, month = month.split('-')
+        res = self.table.select("*").filter('date', 'gte', f'{year}-{month}-01').filter('date', 'lt', f'{year}-{int(month)+1:02d}-01').execute()
+        rows = res.data or []
+        return [_row_to_dc(row) for row in rows] if rows else None
 
     def create(self, data: Paper) -> Paper:
         row = {

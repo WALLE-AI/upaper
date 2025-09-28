@@ -117,6 +117,23 @@ def get_daily_paper():
     return ok(len(created_items), 201 if created_items else 200)
 
 
+@bp.get("/paper_monthly/<paper_monthly>")
+def get_month_paper(paper_monthly:str):
+    """
+    Fetch the top huggingface daily papers for a given daily identifier and create new Paper entries.
+
+    Path parameter:
+      - paper_daily: an identifier for the daily list (e.g. "2025-09" or "2025-08")
+    """
+    # 1) call your HF fetcher (must return iterable of dict-like meta)
+    svc = _service()
+    created_items: List[dict] = []
+    papers = svc.get_by_paper_month(str(paper_monthly))
+    for papers in papers:
+        created_items.append(PaperOut.model_validate(asdict(papers)).model_dump())
+    return ok(len(created_items), 201 if created_items else 200)
+
+
 @bp.get("/<paper_uuid>")
 def get_paper(paper_uuid: str):
     svc = _service()
