@@ -1,64 +1,58 @@
-# uPaper FastAPI Backend
+# Flask + SQLAlchemy + Supabase Switch + OpenAPI Docs + JWT
 
-一个可直接联调的 FastAPI 后端，提供 `GET /papers` 接口，支持搜索、来源与标签过滤、分页。
-前端（Next.js 项目）把请求发到自己的 `/api/papers` 代理，再由代理转发到此后端。
+A production-friendly starter:
+- Flask Blueprints with layered architecture (API → Service → Repository → Model)
+- SQLAlchemy (PostgreSQL/Supabase, MySQL) **or** Supabase PostgREST via env switch
+- Pydantic v2 request/response models
+- OpenAPI at `/openapi.json` + Swagger UI `/docs` + ReDoc `/redoc`
+- Optional JWT utilities (Bearer) for protected routes
 
-## 快速开始
+## Quickstart
+
 ```bash
-python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-# 可选：cp .env.example .env && 编辑 FRONTEND_ORIGIN
-uvicorn app.main:app --reload --port 8000
-# 浏览器打开 http://127.0.0.1:8000/docs 进行联调
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -U pip
+pip install -e .
+cp .env.example .env
+flask --app app.wsgi run --debug
 ```
 
-## API
-### GET /papers
-查询参数：
-- `search`: string（标题/摘要模糊）
-- `sources`: 逗号分隔（如 `HF,arXiv`）
-- `tags`: 逗号分隔
-- `page`: int，默认 1
-- `page_size`: int，默认 20
+Health: `GET /api/health/`  
+Docs: `/docs` and `/redoc`
 
-返回示例：
-```json
-{
-  "items": [
-    {
-      "id": "p1",
-      "title": "Sharing is Caring...",
-      "summary": "Post-training language models...",
-      "source": "HF",
-      "likes": 194,
-      "comments": 24,
-      "tags": ["Reinforcement-Learning", "Agent", "Reasoning"],
-      "aiNotes": ["AT 解析(6个模型)"],
-      "badges": ["Intern-S1", "GLM4.5"]
-    }
-  ],
-  "total": 63
-}
+### Choose repository backend
+```
+PAPER_REPO_BACKEND=sqlalchemy  # default; uses DATABASE_URL via SQLAlchemy
+# PAPER_REPO_BACKEND=supabase   # uses supabase-py (PostgREST)
 ```
 
-### 健康检查
-`GET /health` → `{ "ok": true }`
-
-## 与前端联调
-前端 `.env.local` 设置：
+### Supabase
+Provide at least:
 ```
-API_BASE_URL=http://127.0.0.1:8000
+SUPABASE_URL=...
+SUPABASE_SERVICE_ROLE_KEY=...   # server-side (bypass RLS) recommended
+# or SUPABASE_ANON_KEY=...      # RLS applies
 ```
-Next.js 开发启动后，访问 `http://localhost:3000`，搜索与筛选都应生效。
+Health probe: `GET /api/health/supabase`
 
-## 测试用例
+### JWT (optional)
+```
+JWT_SECRET=change-me
+JWT_ALG=HS256
+```
+Use `from app.auth.jwt import require_bearer` to protect endpoints.
+
+### Create tables quickly (dev only)
 ```bash
-# 取第一页
-curl "http://127.0.0.1:8000/papers?page=1&page_size=5"
-
-# 搜索
-curl "http://127.0.0.1:8000/papers?search=Reasoning&page=1&page_size=5"
-
-# 来源+标签过滤
-curl "http://127.0.0.1:8000/papers?sources=HF,arXiv&tags=Agent,Reasoning&page=1&page_size=5"
+python scripts/quick_create_all.py
 ```
+
+---
+
+## API Documentation
+- OpenAPI JSON: `GET /openapi.json`
+- Swagger UI:   `GET /docs`
+- ReDoc:        `GET /redoc`
+
+The spec is assembled from Pydantic schemas so it stays in sync with payloads.
