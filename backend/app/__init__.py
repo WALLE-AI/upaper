@@ -11,11 +11,13 @@ from .api.papers.routes import bp as papers_bp
 from .docs.routes import bp as docs_bp
 from .errors import register_error_handlers
 from .integrations.supabase_client import supabase_ext
+from flask_cors import CORS
 
 
 def create_app(config_class: type[BaseConfig] | None = None) -> Flask:
     """Create and configure the Flask application."""
     app = Flask(__name__)
+    CORS(app, resources={r"/api/*": {"origins": "http://localhost:3000"}})
     app.config.from_object(config_class or BaseConfig())
 
     # Init extensions
