@@ -118,6 +118,91 @@ def build_openapi() -> Dict[str, Any]:
                 }
                 
             },
+            "/api/papers/analyze/analyze-stream/{paper_id}": {
+                "get": {
+                    "summary": "Analyze a paper by its ID",
+                    "description": "Fetch the top huggingface daily papers for a given daily identifier and create new Paper entries.",
+                    "parameters": [
+                        {
+                            "name": "paper_id",
+                            "in": "query",
+                            "required": True,
+                            "schema": {
+                                "type": "string"
+                            }
+                        }
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "Successful response"
+                        }
+                    }
+                }
+            },
+            "/api/papers/chat/stream/{paper_id}": {
+                "get": {
+                    "summary": "Chat about a paper by its ID",
+                    "description": "Fetch the top huggingface daily papers for a given daily identifier and create new Paper entries.",
+                    "parameters": [
+                        {
+                            "name": "paper_id",
+                            "in": "query",
+                            "required": True,
+                            "schema": {
+                                "type": "string"
+                            }
+                        }
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "Successful response"
+                        }
+                    }
+                }
+            },
+            "/api/papers/translate/translate-stream/{paper_id}": {
+                "get": {
+                    "summary": "Translate a paper by its ID",
+                    "description": "Fetch the top huggingface daily papers for a given daily identifier and create new Paper entries.",
+                    "parameters": [
+                        {
+                            "name": "paper_id",
+                            "in": "query",
+                            "required": True,
+                            "schema": {
+                                "type": "string"
+                            }
+                        }
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "Successful response"
+                        }
+                    }
+                }
+            },
+            "/api/papers/interpret/interpret-stream/{paper_id}": {
+                "get": {
+                    "summary": "Interpret a paper by its ID",
+                    "description": "Fetch the top huggingface daily papers for a given daily identifier and create new Paper entries.",
+                    "parameters": [
+                        {
+                            "name": "paper_id",
+                            "in": "query",
+                            "required": True,
+                            "schema": {
+                                "type": "string"
+                            }
+                        }
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "Successful response"
+                        }
+                    }
+                }
+            },
+
             "/api/papers/daily/paper_daily": {
                 "get": {
                     "tags": ["Papers"],

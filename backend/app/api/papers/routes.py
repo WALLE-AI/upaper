@@ -14,6 +14,7 @@ from ...services.paper_service import PaperService
 from ...domain.paper import Paper
 from .schemas import PaperCreateIn, PaperUpdateIn, PaperOut
 from dataclasses import asdict
+from ...services.llm_service import llm_service
 
 
 bp = Blueprint("papers", __name__)
@@ -69,7 +70,18 @@ def maybe_make_paper(item: dict) -> Paper | None:
 
     date_str = p.get("publishedAt")
     ai_keywords=p.get("ai_keywords") or []
-    ai_summary=p.get("ai_summary") or ""    
+    ai_summary=p.get("ai_summary") or ""
+    
+    if not p.get("summary_zh"):
+        summary = p.get('summary') if isinstance(p, dict) and p.get('summary') else ""
+        summary_translate=llm_service.get_paper_translate(summary)
+        p["summary_zh"] = summary_translate
+        
+    if not p.get("ai_summary_zh"):
+        ai_summary = p.get("ai_summary") or ""
+        ai_summary_translate = llm_service.get_paper_translate(ai_summary)
+        p["ai_summary_zh"] = ai_summary_translate 
+    
     return Paper(
         id=str(uuid.uuid4()),
         title=title,
@@ -83,6 +95,23 @@ def maybe_make_paper(item: dict) -> Paper | None:
         month_url="",
         meta=p
     )
+    
+    
+def translate_summary_and_ai_summary_to_update(paper:dict,svc)->dict:
+    p = PaperOut.model_validate(asdict(paper)).model_dump()
+    if not p.get("meta").get("summary_zh"):
+        summary = p.get("meta").get('summary') if p.get("meta") and isinstance(p.get("meta"), dict) and p.get("meta").get('summary') else ""
+        summary_translate=llm_service.get_paper_translate(summary)
+        p["meta"]["summary_zh"] = summary_translate
+        print("update paper summary:",p.get("id"))
+        svc.update_paper(paper_uuid=p.get("id"),**p)
+    if not p.get("meta").get("ai_summary_zh"):
+        ai_summary = p.get("ai_summary") or ""
+        ai_summary_translate = llm_service.get_paper_translate(ai_summary)
+        p["meta"]["ai_summary_zh"] = ai_summary_translate
+        print("update paper ai summary:",p.get("id"))
+        svc.update_paper(paper_uuid=p.get("id"),**p)
+    return p
 
 @bp.get("/daily/paper_daily")
 def get_daily_paper():
@@ -107,7 +136,8 @@ def get_daily_paper():
         existing = svc.get_by_paper_id(str(paper_id))
         if existing:
             continue
-
+        ##翻译摘要和AI摘要,并且插入数据库中
+        
         p = maybe_make_paper(paper_meta)
         if not p:
             continue
@@ -115,6 +145,42 @@ def get_daily_paper():
         created = svc.create_paper(p)
         created_items.append(PaperOut.model_validate(asdict(created)).model_dump())
     return ok(len(created_items), 201 if created_items else 200)
+
+
+@bp.get("/analyze/analyze-stream/<paper_id>")
+def paper_analyze(paper_id:str):
+    """
+    Fetch the top huggingface daily papers for a given daily identifier and create new Paper entries.
+    """
+    print(paper_id)
+    return ok({"status": "ok"})
+
+@bp.get("/chat/stream/<paper_id>")
+def paper_chat(paper_id:str):
+    """
+    Fetch the top huggingface daily papers for a given daily identifier and create new Paper entries.
+    """
+    print(paper_id)
+    return ok({"status": "ok"})
+
+@bp.get("/translate/translate-stream/<paper_id>")
+def paper_translate(paper_id:str):
+    """
+    Fetch the top huggingface daily papers for a given daily identifier and create new Paper entries.
+    """
+    print(paper_id)
+    return ok({"status": "ok"})
+
+
+@bp.get("/interpret/interpret-stream/<paper_id>")
+def paper_interpret(paper_id:str):
+    """
+    Fetch the top huggingface daily papers for a given daily identifier and create new Paper entries.
+    """
+    print(paper_id)
+    return ok({"status": "ok"})
+
+
 
 
 @bp.get("/paper_monthly/<paper_monthly>")
@@ -129,8 +195,10 @@ def get_month_paper(paper_monthly:str):
     svc = _service()
     created_items: List[dict] = []
     papers = svc.get_by_paper_month(str(paper_monthly))
-    for papers in papers:
-        created_items.append(PaperOut.model_validate(asdict(papers)).model_dump())
+    for index,paper in enumerate(papers):
+        ##翻译摘要和AI摘要,并且插入数据库中
+        p = translate_summary_and_ai_summary_to_update(paper,svc)
+        created_items.append(p)
     return ok(created_items, 201 if created_items else 200)
 
 @bp.get("/filter")
@@ -152,6 +220,7 @@ def get_paper(paper_uuid: str):
     if not p:
         return ok(None, 404)
     return ok(PaperOut.model_validate(asdict(p)).model_dump())
+
 
 @bp.get("/by-paper-id/<paper_id>")
 def get_by_paper_id(paper_id: str):

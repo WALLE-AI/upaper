@@ -81,7 +81,7 @@ class PaperRepositorySupabase:
         body = {k: v for k, v in fields.items() if k in allowed}
         if not body:
             return self.get(paper_uuid)
-        res = self.table.update(body).eq("id", paper_uuid).select("*").execute()
+        res = self.table.update(body).eq("id", paper_uuid).execute()
         rows = res.data or []
         return _row_to_dc(rows[0]) if rows else None
 

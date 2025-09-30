@@ -29,10 +29,10 @@ class PaperService:
         return self.repo.get_by_paper_month(month)
 
     def update_paper(self, paper_uuid: str, **fields) -> Optional[Paper]:
-        if "ai_keywords" in fields and fields["ai_keywords"] is None:
-            fields["ai_keywords"] = []
-        if "meta" in fields and fields["meta"] is None:
-            fields["meta"] = {}
+        # if "ai_keywords" in fields and fields["ai_keywords"] is None:
+        #     fields["ai_keywords"] = []
+        # if "meta" in fields and fields["meta"] is None:
+        #     fields["meta"] = {}
         return self.repo.update(paper_uuid, **fields)
 
     def delete_paper(self, paper_uuid: str) -> bool:
