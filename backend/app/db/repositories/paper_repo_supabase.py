@@ -48,6 +48,11 @@ class PaperRepositorySupabase:
         rows = res.data or []
         return _row_to_dc(rows[0]) if rows else None
     
+    def get_votes_by_paper_id(self, paper_id: str) -> Optional[Paper]:
+        res = self.table.select("*").order("votes", desc=True).execute()
+        rows = res.data or []
+        return _row_to_dc(rows[0]) if rows else None
+    
     
     def get_by_paper_month(self, month: str) -> Optional[Paper]:
         year, month = month.split('-')

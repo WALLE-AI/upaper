@@ -66,6 +66,7 @@ coverage.xml
 .pytest_cache/
 cover/
 uv.lock
+storage
 
 # Translations
 *.mo

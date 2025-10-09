@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import List
 import uuid
+from ...services.file_service import FileService
 from flask import Blueprint, request
 from sqlalchemy.orm import Session
 
@@ -155,6 +156,15 @@ def paper_analyze(paper_id:str):
     print(paper_id)
     return ok({"status": "ok"})
 
+
+@bp.get("/search/paper-search")
+def paper_search(query:str,limit:int=10):
+    """
+    Fetch the top huggingface daily papers for a given daily identifier and create new Paper entries.
+    """
+    print(query)
+    return ok({"status": "ok"})
+
 @bp.get("/chat/stream/<paper_id>")
 def paper_chat(paper_id:str):
     """
@@ -226,6 +236,10 @@ def get_paper(paper_uuid: str):
 def get_by_paper_id(paper_id: str):
     svc = _service()
     p = svc.get_by_paper_id(paper_id)
+    ##下载pdf
+    path,pid_dir = FileService.download_file(paper_id)
+    md_content = FileService.parser_file(file_path=path,file_name_dir=pid_dir,parser_type="mineru")
+    print("md_content length:",len(md_content))
     if not p:
         return ok(None, 404)
     return ok(PaperOut.model_validate(asdict(p)).model_dump())
