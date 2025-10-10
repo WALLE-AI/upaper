@@ -65,8 +65,9 @@ def download_paper_by_id(paper_id: str,pdf_file_root) -> None:
 
 class FileDonwloader():
     def __init__(self):
-        self.pdf_file_root = os.getenv("STORAGE_LOCAL_PATH")
+        self.pdf_file_root = os.getenv("STORAGE_LOCAL_PATH",'./save/storage')
     def download(self, paper_id) -> str:
         """Download the file from the given URL to the destination path."""
+        print("pdf_file_root:",self.pdf_file_root)
         path = download_paper_by_id(paper_id=paper_id,pdf_file_root=self.pdf_file_root)
         return path
