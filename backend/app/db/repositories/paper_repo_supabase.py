@@ -18,7 +18,7 @@ def _row_to_dc(row: Dict[str, Any]) -> Paper:
         huggingface_url=row.get("huggingface_url"),
         date_str=row.get("date_str"),
         paper_id=row.get("paper_id"),
-        votes=row.get("votes"),
+        votes=int(row.get("votes") or 0),
         ai_keywords=list(row.get("ai_keywords") or []),
         ai_summary=row.get("ai_summary") or "",
         meta=dict(row.get("meta") or {}),
@@ -54,13 +54,37 @@ class PaperRepositorySupabase:
         return _row_to_dc(rows[0]) if rows else None
     
     
-    def get_by_paper_month(self, month: str) -> Optional[Paper]:
-        year, month = month.split('-')
-        res = self.table.select("*").filter('date', 'gte', f'{year}-{month}-01').filter('date', 'lt', f'{year}-{int(month)+1:02d}-01').execute()
+    def get_by_paper_month(self, month: str, sort_by=None, **_kwargs) -> Optional[Paper]:
+        # 先按月份筛选，再应用 votes 排序
+        year_str, month_str = month.split('-')
+        y = int(year_str)
+        m = int(month_str)
+        next_y, next_m = (y + 1, 1) if m == 12 else (y, m + 1)
+        start_date = f"{y:04d}-{m:02d}-01"
+        end_date = f"{next_y:04d}-{next_m:02d}-01"
+
+        q = (
+            self.table.select("*")
+            .filter('date', 'gte', start_date)
+            .filter('date', 'lt', end_date)
+        )
+
+        # # likes_desc 表示按 votes 降序；likes_asc 为升序
+        # if sort_by == "likes_desc":
+        #     q = q.order("votes", desc=True)
+        # elif sort_by == "likes_asc":
+        #     q = q.order("votes", desc=False)
+
+        res = q.execute()
         rows = res.data or []
+        ##按 votes 对 rows 进行排序（在内存中处理，None 视为 0）
+        if sort_by == "likes_desc":
+            rows = sorted(rows, key=lambda r: int(r.get("votes") or 0), reverse=True)
+        elif sort_by == "likes_asc":
+            rows = sorted(rows, key=lambda r: int(r.get("votes") or 0))
         return [_row_to_dc(row) for row in rows] if rows else None
 
-    def create(self, data: Paper) -> Paper:
+    def create(self, data: Paper) -> Paper: 
         row = {
             "id": data.id or str(uuid.uuid4()),
             "title": data.title,
@@ -69,7 +93,7 @@ class PaperRepositorySupabase:
             "huggingface_url": data.huggingface_url,
             "date": data.date_str,
             "paper_id": data.paper_id,
-            "votes": data.votes,
+            "votes": data.votes if data.votes is not None else 0,
             "ai_keywords": data.ai_keywords or [],
             "ai_summary": data.ai_summary or "",
             "meta": data.meta or {},

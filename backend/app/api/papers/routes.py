@@ -148,12 +148,12 @@ def get_daily_paper():
     return ok(len(created_items), 201 if created_items else 200)
 
 
-@bp.get("/analyze/analyze-stream/<paper_id>")
-def paper_analyze(paper_id:str):
+@bp.post("/analyze-stream")
+def paper_analyze():
     """
     Fetch the top huggingface daily papers for a given daily identifier and create new Paper entries.
     """
-    print(paper_id)
+    print("interface success")
     return ok({"status": "ok"})
 
 
@@ -165,36 +165,36 @@ def paper_search(query:str,limit:int=10):
     print(query)
     return ok({"status": "ok"})
 
-@bp.get("/chat/stream/<paper_id>")
-def paper_chat(paper_id:str):
+@bp.post("/paper-chat/stream")
+def paper_chat():
     """
     Fetch the top huggingface daily papers for a given daily identifier and create new Paper entries.
     """
-    print(paper_id)
+    print("interface success")
     return ok({"status": "ok"})
 
-@bp.get("/translate/translate-stream/<paper_id>")
-def paper_translate(paper_id:str):
+@bp.post("/translate-stream")
+def paper_translate():
     """
     Fetch the top huggingface daily papers for a given daily identifier and create new Paper entries.
     """
-    print(paper_id)
+    print("interface success")
     return ok({"status": "ok"})
 
 
-@bp.get("/interpret/interpret-stream/<paper_id>")
-def paper_interpret(paper_id:str):
+@bp.post("/interpret-stream")
+def paper_interpret():
     """
     Fetch the top huggingface daily papers for a given daily identifier and create new Paper entries.
     """
-    print(paper_id)
+    print("interface success")
     return ok({"status": "ok"})
 
 
 
 
 @bp.get("/paper_monthly/<paper_monthly>")
-def get_month_paper(paper_monthly:str):
+def get_month_paper(paper_monthly: str):
     """
     Fetch the top huggingface daily papers for a given daily identifier and create new Paper entries.
 
@@ -204,7 +204,17 @@ def get_month_paper(paper_monthly:str):
     # 1) call your HF fetcher (must return iterable of dict-like meta)
     svc = _service()
     created_items: List[dict] = []
-    papers = svc.get_by_paper_month(str(paper_monthly))
+
+    # Query parameters
+    sort_by = request.args.get("sort_by")  # e.g. likes_desc, likes_asc, created_at_desc
+    page = int(request.args.get("page", "1"))
+    limit = int(request.args.get("limit", "20"))
+    # Support both Chinese key and English fallback
+    source = request.args.get("论文来源") or request.args.get("source")
+
+    papers = svc.get_by_paper_month(
+        str(paper_monthly),sort_by
+    )
     for index,paper in enumerate(papers):
         ##翻译摘要和AI摘要,并且插入数据库中
         p = translate_summary_and_ai_summary_to_update(paper,svc)
