@@ -1,8 +1,9 @@
 import os
 import re
 from playwright.sync_api import sync_playwright, Error as PlaywrightError
+from ..db.ext_storage import storage
 
-def download_paper_by_id(paper_id: str,pdf_file_root) -> None:
+def download_paper_by_id(paper_id: str, pdf_file_root) -> None:
     """
     使用浏览器(Playwright)下载 arXiv 论文 PDF 到 pdf_file_root 目录。
     Args:
@@ -19,6 +20,8 @@ def download_paper_by_id(paper_id: str,pdf_file_root) -> None:
     if not os.path.exists(pid_dir):
         os.makedirs(pid_dir)
     save_path = os.path.join(pid_dir, f"{pid}.pdf")
+    # object storage key for saving the PDF via Storage
+    storage_key = f"papers/{paper_id}/{pid}.pdf"
     
     if os.path.exists(save_path):
         # 文件已存在则跳过下载
@@ -38,8 +41,17 @@ def download_paper_by_id(paper_id: str,pdf_file_root) -> None:
             # 方式1：用浏览器上下文的 request 客户端直接 GET（依旧走浏览器栈，稳定省心）
             resp = context.request.get(pdf_url, timeout=60_000)
             if resp.ok:
+                pdf_bytes = resp.body()
                 with open(save_path, "wb") as f:
-                    f.write(resp.body())
+                    f.write(pdf_bytes)
+                # Save to OSS (or configured storage) as well
+                try:
+                    # avoid duplicate uploads if already exists
+                    if not storage.exists(storage_key):
+                        storage.save(storage_key, pdf_bytes)
+                except Exception as _e:
+                    # best-effort upload; do not fail download
+                    print(f"storage save failed for {storage_key}: {_e}")
             else:
                 # 方式2（回退）：进入摘要页点击“PDF”按钮并捕获下载事件
                 # 有些站点会对直链做限制时可触发下载事件保存
@@ -52,6 +64,14 @@ def download_paper_by_id(paper_id: str,pdf_file_root) -> None:
                 download = dl_info.value
                 # 将下载保存到目标路径
                 download.save_as(save_path)
+                # Read file bytes and save to storage
+                try:
+                    with open(save_path, "rb") as f:
+                        file_bytes = f.read()
+                    if not storage.exists(storage_key):
+                        storage.save(storage_key, file_bytes)
+                except Exception as _e:
+                    print(f"storage save failed for {storage_key}: {_e}")
 
             context.close()
             browser.close()
