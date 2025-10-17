@@ -37,6 +37,11 @@ class PaperRepositorySupabase:
         res = q.execute()
         rows = res.data or []
         return [_row_to_dc(r) for r in rows]
+    
+    def get_all_paper_id(self):
+        res = self.table.select("paper_id").execute()
+        rows = res.data or []
+        return [r.get("paper_id") for r in rows if r.get("paper_id") is not None]
 
     def get(self, paper_uuid: str) -> Optional[Paper]:
         res = self.table.select("*").eq("id", paper_uuid).limit(1).execute()
