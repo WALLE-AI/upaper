@@ -31,6 +31,11 @@ import argparse
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Dict
 
+from dotenv import load_dotenv
+
+from hf_papers_download_or_parser_to_oss import donwload_pdf_to_local
+load_dotenv()
+
 # ========== Utilities ==========
 
 HEADING_RE = re.compile(r'^(?P<hashes>#{1,6})\s+(?P<title>.+?)\s*$', re.UNICODE)
@@ -333,9 +338,19 @@ def render_bilingual_md(chunks: List[Chunk], translations: Dict[int, str], style
 
 # ========== Main pipeline ==========
 
+def simple_progress(i, total, prefix="Translating"):
+    bar_len = 30
+    filled = int(bar_len * (i / total))
+    bar = "█" * filled + "-" * (bar_len - filled)
+    percent = f"{100 * i / total:.1f}%"
+    sys.stdout.write(f"\r{prefix} |{bar}| {percent} ({i}/{total})")
+    sys.stdout.flush()
+    if i == total:
+        sys.stdout.write("\n")
+
 def main():
     parser = argparse.ArgumentParser(description="Split Markdown by headings, translate chunks to Chinese, and emit bilingual Markdown.")
-    parser.add_argument("input", help="Path to input .md file")
+    # parser.add_argument("file_path",type=str,default="hf_papers/2304.09355/2304.09355.md",help="Path to input .md file")
     parser.add_argument("-o", "--output", default=None, help="Path to output bilingual .md (default: <input>.bilingual.md)")
     parser.add_argument("--min_level", type=int, default=1, help="Minimum heading level to start chunking (default 1=#)")
     parser.add_argument("--style", choices=["blockquote", "quoted", "heading_split"], default="blockquote", help="Bilingual formatting style")
@@ -346,30 +361,46 @@ def main():
     parser.add_argument("--max_chars", type=int, default=6000, help="Per-request char limit to avoid overly long prompts")
     parser.add_argument("--translate_code", action="store_true", help="If set, will allow translation inside code blocks (NOT recommended)")
     args = parser.parse_args()
+    
+    file_path = donwload_pdf_to_local(paper_id="2305.03043")
 
-    with open(args.input, "r", encoding="utf-8") as f:
+    # file_path="hf_papers/2304.09355/2304.09355.md"
+    with open(file_path, "r", encoding="utf-8") as f:
         md_text = f.read()
 
     chunks = parse_markdown_into_chunks(md_text, min_level=args.min_level)
 
     # Pre-process: if translate_code is False, we will wrap code blocks with sentinels to discourage translation.
     # (The prompt already instructs not to translate code; this is an extra safety measure).
+    openai_api_key="empty"
+    openai_base_url=os.getenv("LOCAL_QWEN3_INSTRUCT_BASE")
+    model =  os.getenv("LOCAL_QWEN3_INSTRUCT_MODEL")
+    temperature=0.2
 
     translations: Dict[int, str] = {}
-    translator = Translator(api_key=args.openai_api_key, base_url=args.openai_base_url, model=args.model, temperature=args.temperature)
+    translator = Translator(api_key=openai_api_key,base_url=openai_base_url,model=model,temperature=temperature)
 
+    errors = 0
+    translations = {}
+    total = len(chunks)
     for idx, ch in enumerate(chunks):
         raw = ch.content()
         # Quick skip: if content empty, put empty translation
         if not raw.strip():
             translations[idx] = ""
+            simple_progress(idx + 1, total)
             continue
-
-        kind = detect_section_kind(ch.title, raw)
-        zh = translator.translate(raw, section_title=ch.title, kind=kind, max_chars=args.max_chars)
-        translations[idx] = zh
-
-    out_path = args.output or (os.path.splitext(args.input)[0] + ".bilingual.md")
+        try:
+            kind = detect_section_kind(ch.title, raw)
+            zh = translator.translate(raw, section_title=ch.title, kind=kind, max_chars=args.max_chars)
+            translations[idx] = zh
+        except Exception:
+            errors += 1
+            translations[idx] = ""
+        simple_progress(idx + 1, total)
+    if errors:
+        print(f"[WARN] {errors} chunks failed during translation.")
+    out_path = args.output or (os.path.splitext(file_path)[0] + ".bilingual.md")
     out_md = render_bilingual_md(chunks, translations, style=args.style)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(out_md)

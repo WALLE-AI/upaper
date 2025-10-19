@@ -2,6 +2,8 @@ import argparse
 from pathlib import Path
 import alibabacloud_oss_v2 as oss
 
+from hf_papers_download_or_parser_to_oss import donwload_pdf_to_local
+
 # 创建命令行参数解析器
 parser = argparse.ArgumentParser(description="put object from file sample")
 
@@ -80,4 +82,4 @@ def main():
 
 # 脚本入口，当文件被直接运行时调用main函数
 if __name__ == "__main__":
-    main()
+    donwload_pdf_to_local(paper_id="2304.09355")

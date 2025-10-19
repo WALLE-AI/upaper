@@ -265,6 +265,37 @@ def find_assets(
     return {k: sorted(v) for k, v in results.items()}
 
 
+def donwload_pdf_to_local(paper_id: str):
+    folder = "hf_papers/"+paper_id
+    folder_images = folder + "/images" 
+    key = folder + f"/{paper_id}.md"
+    
+    bucket=required_envs.get("ALIYUN_OSS_BUCKET_NAME")
+
+    if client.is_object_exist(
+        bucket=bucket,
+        key=key
+    ):
+    # 执行获取对象的请求，指定存储空间名称和对象名称
+        result = client.get_object(oss.GetObjectRequest(
+            bucket=bucket,  # 指定存储空间名称
+            key=key,  # 指定对象键名
+        ))
+            # 输出获取对象的结果信息，用于检查请求是否成功
+        print(f'status code: {result.status_code},'
+            f' request id: {result.request_id},')
+    else:
+        print(f"{key} is no exist")
+    # ========== 方式1：完整读取 ==========
+    with result.body as body_stream:
+        data = body_stream.read()
+        print(f"文件读取完成，数据长度：{len(data)} bytes")
+        if not os.path.exists(folder):
+            os.makedirs(folder)
+        with open(key, 'wb') as f:
+            f.write(data)
+        print(f"文件下载完成，保存至路径：{key}")
+    return key
 
 
 def upload_pdf_to_oss(file_path: str, paper_id: str) -> Optional[str]:
