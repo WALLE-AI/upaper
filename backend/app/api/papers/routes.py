@@ -174,69 +174,9 @@ def paper_chat():
     """
     print("interface success")
     return ok({"status": "ok"})
-def _iter_mock_translation(paper: Dict, target_lang: str, delay_s: float = 0.02) -> Iterable[str]:
-    """按词流式输出 mock 翻译，内容与前端 fallback 文案保持一致。"""
-    title = paper.get("title") or ""
-    abstract = paper.get("abstract") or ""
-    mock_title = f"**标题 ({target_lang}):** {title} (模拟翻译)"
-    mock_abs = (
-        f"**摘要 ({target_lang}):**\n"
-        f"{abstract} (这是一个模拟的 {target_lang} 翻译，用于在无法连接到后端服务时进行演示。)"
-    )
-    full_text = f"{mock_title}\n\n{mock_abs}"
-    for word in full_text.split(" "):
-        yield word + " "
-        # 小睡以演示“流式效果”；生产可去掉或减小
-        time.sleep(delay_s)
-import codecs
 
-def _iter_real_translation(paper: Dict, target_lang: str, chunk_bytes: int = 4096) -> Iterable[str]:
-    """
-    读取本地已翻译好的 xx.md 文件，并流式输出给前端。
-    - 默认从 ./data/translations/ 查找（可通过 current_app.config['TRANSLATIONS_DIR'] 改）
-    - 支持 paper['translated_path'] 指定文件（路径会进行安全校验）
-    - 逐块 bytes -> 增量 UTF-8 解码，避免多字节字符被截断
-    """
-    md_path = "D:/LLM/upaper/hf_papers/2304.09355/2304.09355.bilingual.md"
-    if not md_path:
-        # 未找到对应文件，退回到 mock（或抛错也行，按需改）
-        yield from _iter_mock_translation(paper, target_lang)
-        return
-
-    # 以二进制方式读取，并用增量解码器做边读边解码，保证 UTF-8 完整性
-    decoder = codecs.getincrementaldecoder("utf-8")()
-    with open(md_path, "rb") as f:
-        while True:
-            buf = f.read(chunk_bytes)
-            if not buf:
-                # flush decoder 缓存
-                remainder = decoder.decode(b"", final=True)
-                if remainder:
-                    yield remainder
-                break
-            text = decoder.decode(buf)
-            if text:
-                yield text
                 
-def _as_plain_text_stream(gen: Iterable[str], heartbeat_interval_s: Optional[float] = None) -> Iterable[bytes]:
-    """
-    将 str 生成器封装为 bytes，并可选地周期性发出心跳，避免中间件/代理回收空闲连接。
-    """
-    last_flush = time.time()
-    for chunk in gen:
-        data = chunk if isinstance(chunk, str) else str(chunk)
-        yield data.encode("utf-8")
-        last_flush = time.time()
 
-        # 如需强制“更细粒度”分块，可考虑在此处切分 \n 或句号。
-        # 生产环境大多交给上游流来决定 chunk 大小。
-
-        if heartbeat_interval_s:
-            now = time.time()
-            if now - last_flush >= heartbeat_interval_s:
-                # 发送极小心跳（不可影响前端显示，选用零宽空格或空字符串+flush）
-                yield b"\xee\x80\x80"  # ZERO-WIDTH-NON-BREAKING-SPACE (U+FEFF)
-                last_flush = now
 
 @bp.post("/translate-stream")
 def paper_translate():
@@ -286,15 +226,15 @@ def paper_translate():
     try:
         gen: Iterable[str]
         if force_mock:
-            gen = _iter_mock_translation(paper, target_lang)
+            gen = FileService._iter_mock_translation(paper, target_lang)
         else:
-            gen = _iter_real_translation(paper, target_lang)
+            gen = FileService._iter_real_translation(paper, target_lang)
 
         # 可选：设置心跳间隔（秒）。如后面有 nginx / cloudflare，可设 10~15s。
         heartbeat_every = None  # 例如 15.0
 
         resp = Response(
-            stream_with_context(_as_plain_text_stream(gen, heartbeat_interval_s=heartbeat_every)),
+            stream_with_context(FileService._as_plain_text_stream(gen, heartbeat_interval_s=heartbeat_every)),
             # **与前端匹配**：纯文本流，而非 text/event-stream
             mimetype="text/plain; charset=utf-8",
         )

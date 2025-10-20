@@ -3,16 +3,13 @@ import base64
 from pathlib import Path
 import re
 from typing import Dict, Any, Optional
-from app.db.repositories.paper_repo_supabase import PaperRepositorySupabase
-from app.db.session import Database
-from app.integrations.supabase_client import SupabaseExt
-from app.services.paper_service import PaperService
+from ..db.repositories.paper_repo_supabase import PaperRepositorySupabase
 from loguru import logger
 import requests
 from playwright.sync_api import sync_playwright, Error as PlaywrightError
 import alibabacloud_oss_v2 as oss
 
-from md_bilingual import translate_markdown_file
+from .md_bilingual import translate_markdown_file
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -402,13 +399,14 @@ class PaperFileDownloadAndParser:
         path, pid_dir = download_paper_by_id(paper_id, pdf_file_root)
         md_content = parse_pdf(file_path=path, file_name_dir=pid_dir)
         if md_content:
-            translate_markdown_file(paper_id=paper_id,md_text=md_content,is_local=True)
+            trans_md = translate_markdown_file(paper_id=paper_id,md_text=md_content,is_local=True)
         upload_pdf_to_oss(pid_dir, paper_id)
         return {
             "paper_id": paper_id,
             "pdf_path": path,
             "markdown_content": md_content,
-        }
+            "translated_markdown_content": trans_md
+            }
         
         
 if __name__ == "__main__":

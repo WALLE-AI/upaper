@@ -411,79 +411,79 @@ def translate_markdown_file(paper_id: str,md_text:str=None,is_local:bool=False) 
     return out_md
     
 
-def main():
-    parser = argparse.ArgumentParser(description="Split Markdown by headings, translate chunks to Chinese, and emit bilingual Markdown.")
-    # parser.add_argument("file_path",type=str,default="hf_papers/2304.09355/2304.09355.md",help="Path to input .md file")
-    parser.add_argument("-o", "--output", default=None, help="Path to output bilingual .md (default: <input>.bilingual.md)")
-    parser.add_argument("--min_level", type=int, default=1, help="Minimum heading level to start chunking (default 1=#)")
-    parser.add_argument("--style", choices=["blockquote", "quoted", "heading_split"], default="blockquote", help="Bilingual formatting style")
-    parser.add_argument("--openai_api_key", default=None, help="OpenAI (or compatible) API key")
-    parser.add_argument("--openai_base_url", default=None, help="OpenAI-compatible base URL (default: https://api.openai.com/v1)")
-    parser.add_argument("--model", default="gpt-4o-mini", help="Model name (default: gpt-4o-mini)")
-    parser.add_argument("--temperature", type=float, default=0.2, help="Sampling temperature (default 0.2)")
-    parser.add_argument("--max_chars", type=int, default=6000, help="Per-request char limit to avoid overly long prompts")
-    parser.add_argument("--translate_code", action="store_true", help="If set, will allow translation inside code blocks (NOT recommended)")
-    args = parser.parse_args()
+# def main():
+#     parser = argparse.ArgumentParser(description="Split Markdown by headings, translate chunks to Chinese, and emit bilingual Markdown.")
+#     # parser.add_argument("file_path",type=str,default="hf_papers/2304.09355/2304.09355.md",help="Path to input .md file")
+#     parser.add_argument("-o", "--output", default=None, help="Path to output bilingual .md (default: <input>.bilingual.md)")
+#     parser.add_argument("--min_level", type=int, default=1, help="Minimum heading level to start chunking (default 1=#)")
+#     parser.add_argument("--style", choices=["blockquote", "quoted", "heading_split"], default="blockquote", help="Bilingual formatting style")
+#     parser.add_argument("--openai_api_key", default=None, help="OpenAI (or compatible) API key")
+#     parser.add_argument("--openai_base_url", default=None, help="OpenAI-compatible base URL (default: https://api.openai.com/v1)")
+#     parser.add_argument("--model", default="gpt-4o-mini", help="Model name (default: gpt-4o-mini)")
+#     parser.add_argument("--temperature", type=float, default=0.2, help="Sampling temperature (default 0.2)")
+#     parser.add_argument("--max_chars", type=int, default=6000, help="Per-request char limit to avoid overly long prompts")
+#     parser.add_argument("--translate_code", action="store_true", help="If set, will allow translation inside code blocks (NOT recommended)")
+#     args = parser.parse_args()
     
-    file_data = donwload_md_to_local(paper_id="2305.05065")
+#     file_data = donwload_md_to_local(paper_id="2305.05065")
 
-    # file_path="hf_papers/2304.09355/2304.09355.md"
-    # if isinstance(file_path,str):
-    # with open(file_path, "r", encoding="utf-8") as f:
-    #     md_text = f.read()
+#     # file_path="hf_papers/2304.09355/2304.09355.md"
+#     # if isinstance(file_path,str):
+#     # with open(file_path, "r", encoding="utf-8") as f:
+#     #     md_text = f.read()
 
-    chunks = parse_markdown_into_chunks(file_data, min_level=args.min_level)
+#     chunks = parse_markdown_into_chunks(file_data, min_level=args.min_level)
 
-    # Pre-process: if translate_code is False, we will wrap code blocks with sentinels to discourage translation.
-    # (The prompt already instructs not to translate code; this is an extra safety measure).
-    openai_api_key="empty"
-    openai_base_url=os.getenv("LOCAL_QWEN3_INSTRUCT_BASE")
-    model =  os.getenv("LOCAL_QWEN3_INSTRUCT_MODEL")
-    temperature=0.2
+#     # Pre-process: if translate_code is False, we will wrap code blocks with sentinels to discourage translation.
+#     # (The prompt already instructs not to translate code; this is an extra safety measure).
+#     openai_api_key="empty"
+#     openai_base_url=os.getenv("LOCAL_QWEN3_INSTRUCT_BASE")
+#     model =  os.getenv("LOCAL_QWEN3_INSTRUCT_MODEL")
+#     temperature=0.2
 
-    translations: Dict[int, str] = {}
-    translator = Translator(api_key=openai_api_key,base_url=openai_base_url,model=model,temperature=temperature)
+#     translations: Dict[int, str] = {}
+#     translator = Translator(api_key=openai_api_key,base_url=openai_base_url,model=model,temperature=temperature)
 
-    errors = 0
-    translations = {}
-    total = len(chunks)
-    for idx, ch in enumerate(chunks):
-        raw = ch.content()
-        # Quick skip: if content empty, put empty translation
-        if not raw.strip():
-            translations[idx] = ""
-            simple_progress(idx + 1, total)
-            continue
-        try:
-            kind = detect_section_kind(ch.title, raw)
-            zh = translator.translate(raw, section_title=ch.title, kind=kind, max_chars=args.max_chars)
-            translations[idx] = zh
-        except Exception:
-            errors += 1
-            translations[idx] = ""
-        simple_progress(idx + 1, total)
-    if errors:
-        print(f"[WARN] {errors} chunks failed during translation.")
-    out_path = args.output or (os.path.splitext(file_path)[0] + ".bilingual.md")
-    out_md = render_bilingual_md(chunks, translations, style=args.style)
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write(out_md)
+#     errors = 0
+#     translations = {}
+#     total = len(chunks)
+#     for idx, ch in enumerate(chunks):
+#         raw = ch.content()
+#         # Quick skip: if content empty, put empty translation
+#         if not raw.strip():
+#             translations[idx] = ""
+#             simple_progress(idx + 1, total)
+#             continue
+#         try:
+#             kind = detect_section_kind(ch.title, raw)
+#             zh = translator.translate(raw, section_title=ch.title, kind=kind, max_chars=args.max_chars)
+#             translations[idx] = zh
+#         except Exception:
+#             errors += 1
+#             translations[idx] = ""
+#         simple_progress(idx + 1, total)
+#     if errors:
+#         print(f"[WARN] {errors} chunks failed during translation.")
+#     out_path = args.output or (os.path.splitext(file_path)[0] + ".bilingual.md")
+#     out_md = render_bilingual_md(chunks, translations, style=args.style)
+#     with open(out_path, "w", encoding="utf-8") as f:
+#         f.write(out_md)
 
-    # Emit a small JSON index of chunks (optional, might help downstream users)
-    index = [{
-        "index": i,
-        "level": ch.level,
-        "title": ch.title,
-        "start_line": ch.start_line,
-        "end_line": ch.end_line,
-        "chars": len(ch.content())
-    } for i, ch in enumerate(chunks)]
-    with open(out_path + ".index.json", "w", encoding="utf-8") as f:
-        json.dump(index, f, ensure_ascii=False, indent=2)
+#     # Emit a small JSON index of chunks (optional, might help downstream users)
+#     index = [{
+#         "index": i,
+#         "level": ch.level,
+#         "title": ch.title,
+#         "start_line": ch.start_line,
+#         "end_line": ch.end_line,
+#         "chars": len(ch.content())
+#     } for i, ch in enumerate(chunks)]
+#     with open(out_path + ".index.json", "w", encoding="utf-8") as f:
+#         json.dump(index, f, ensure_ascii=False, indent=2)
 
-    print(f"[OK] Wrote bilingual markdown to: {out_path}")
-    print(f"[OK] Chunk index saved to: {out_path}.index.json")
-    print(f"[INFO] Total chunks: {len(chunks)}")
+#     print(f"[OK] Wrote bilingual markdown to: {out_path}")
+#     print(f"[OK] Chunk index saved to: {out_path}.index.json")
+#     print(f"[INFO] Total chunks: {len(chunks)}")
 
-if __name__ == "__main__":
-    main()
+# if __name__ == "__main__":
+#     main()
