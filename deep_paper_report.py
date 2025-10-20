@@ -1,554 +1,534 @@
 # -*- coding: utf-8 -*-
 """
-deep_paper_report.py
-功能：
-1) 解析 Markdown 学术论文（含图片链接）
-2) 自动抽取结构 & 深度分析维度
-3) 生成“深度解读 Prompt”
-4) （可选）Web 检索增补
-5) 生成中文图文深度研究报告（Markdown），引用源文图片链接
+paper_deep_reader.py
 
-用法：
-  python deep_paper_report.py /path/to/paper.md --out out.md --with-web
+功能：
+1) 解析 Markdown 学术论文（含图片链接），抽取题目、作者、摘要、章节大纲与图片清单
+2) **自适应 Prompt**：根据论文研究属性（综述/方法/系统/理论/数据集/效率/消融/领域）动态生成深度解读 Prompt
+3) 可选：接入大模型（GPT-5/OpenAI、Gemini、豆包）与 WebSearch，直接生成**中文图文深度报告**
+4) 严格复用源 MD 的图片 URL，在“方法/实验”小节就地内联；若模型未插图则自动补图
 """
 
-import re
-import os
-import sys
-import json
-import time
-import textwrap
-import argparse
-from typing import List, Dict, Tuple, Optional, Callable
+import os, re, json, argparse
 from dataclasses import dataclass, field
+from typing import List, Dict, Optional, Callable, Tuple
+from datetime import datetime
 
-import requests
-from bs4 import BeautifulSoup
-import markdown as mdlib
+try:
+    import requests
+except Exception:
+    requests = None
 
-# ----------------------------
-# 数据结构
-# ----------------------------
+HEADING_RE = re.compile(r'^(#{1,6})\s*(.+?)\s*$', re.MULTILINE)
+IMAGE_RE   = re.compile(r'!\[(.*?)\]\((.*?)\)')
 
 @dataclass
-class Figure:
+class PaperImage:
     alt: str
     url: str
-    caption: str = ""
-    context_headings: List[str] = field(default_factory=list)
+    context_heading: Optional[str] = None
 
 @dataclass
-class ParsedMD:
+class PaperSection:
+    level: int
+    title: str
+    start: int
+    end: int
+    text: str
+    images: List[PaperImage] = field(default_factory=list)
+
+@dataclass
+class ParsedPaper:
     title: str
     authors: List[str]
     abstract: str
-    sections: List[Tuple[str, str]]  # [(heading, body_md)]
-    figures: List[Figure]
-    references: str
+    sections: List[PaperSection]
+    images: List[PaperImage]
     raw_text: str
 
-@dataclass
-class Analysis:
-    problem: str
-    motivation: str
-    contributions: List[str]
-    method_highlevel: str
-    method_details: List[str]
-    datasets: List[str]
-    metrics: List[str]
-    experiments: List[str]
-    baselines: List[str]
-    results_takeaways: List[str]
-    limitations: List[str]
-    risks_bias: List[str]
-    ablations: List[str]
-    future_work: List[str]
-    glossary: Dict[str, str]
-    suggested_fig_anchors: Dict[str, List[int]]  # section_key -> list(fig_idx)
+def _extract_title(md: str) -> str:
+    m = re.search(r'^\#\s+(.+)$', md, re.MULTILINE)
+    if m: return m.group(1).strip()
+    for line in md.splitlines():
+        if line.strip(): return line.strip()
+    return "未命名论文"
 
-# ----------------------------
-# 1) 解析 Markdown
-# ----------------------------
-
-HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$", re.M)
-IMG_RE = re.compile(r"!\[(.*?)\]\((.*?)\)")
-AUTHOR_LINE_RE = re.compile(r"(?i)^\s*(authors?|author)\s*[:：]\s*(.+)$")
-ABSTRACT_HEAD_RE = re.compile(r"(?i)^#{1,6}\s*abstract\s*$")
-
-def parse_markdown(md_path: str) -> ParsedMD:
-    with open(md_path, "r", encoding="utf-8") as f:
-        raw = f.read()
-
-    # 标题：优先第一行 H1，否则首行文本
-    title = ""
-    m = re.search(r"^#\s+(.+)$", raw, flags=re.M)
-    if m:
-        title = m.group(1).strip()
-    else:
-        first_line = raw.strip().splitlines()[0] if raw.strip() else ""
-        title = first_line.strip()
-
-    # 作者：从标题附近或前 50 行内的 author/authors 行抽取
+def _extract_authors(md: str) -> List[str]:
+    lines = md.splitlines()
     authors = []
-    head_block = "\n".join(raw.splitlines()[:50])
-    for line in head_block.splitlines():
-        m = AUTHOR_LINE_RE.match(line)
-        if m:
-            # 逗号或 & / 和 / 与 / and
-            names = re.split(r",|&| and |、|，|；|;|/|·|\band\b", m.group(2), flags=re.I)
-            authors = [n.strip(" -–—") for n in names if n.strip()]
-            break
+    title_idx = None
+    for i, line in enumerate(lines[:50]):
+        if line.startswith("# "):
+            title_idx = i; break
+    if title_idx is None: title_idx = 0
+    window = lines[title_idx+1:min(title_idx+8, len(lines))]
+    for w in window:
+        lw = w.strip()
+        if not lw: continue
+        if any(k in lw.lower() for k in ["university", "google", "meta", "deepmind", "lab", "department", "@"]):
+            parts = re.split(r',|;|\band\b|\&', lw)
+            for p in parts:
+                p = p.strip().strip("*")
+                if p and len(p.split()) <= 8 and not p.lower().startswith(("abstract", "figure", "table")):
+                    authors.append(p)
+    authors_clean = []
+    for a in authors:
+        a = re.sub(r'\s+', ' ', a)
+        if a not in authors_clean:
+            authors_clean.append(a)
+    return authors_clean[:12]
 
-    # 抽取 Abstract：找 "Abstract" 标题块，否则关键字
-    abstract = ""
-    abs_head = ABSTRACT_HEAD_RE.search(raw)
-    if abs_head:
-        # 从该标题到下一个标题为摘要
-        start = abs_head.end()
-        nxt = HEADING_RE.search(raw, pos=start)
-        abstract = raw[start:nxt.start()].strip() if nxt else raw[start:].strip()
-    else:
-        # 回退：找以 "Abstract" 开头段
-        mm = re.search(r"(?i)\bAbstract\b[:：]?(.*?)(\n\n|$)", raw, flags=re.S)
-        if mm:
-            abstract = mm.group(1).strip()
+def _extract_abstract(md: str) -> str:
+    abs_pat = re.compile(r'^\s*#*\s*(Abstract|摘要)\s*\n+(.+?)(?:\n\s*#{1,6}\s|\Z)', re.IGNORECASE|re.DOTALL|re.MULTILINE)
+    m = abs_pat.search(md)
+    if m: return m.group(2).strip()
+    txt = md.strip()
+    first_para = re.split(r'\n\s*\n', txt, maxsplit=1)[0]
+    return first_para.strip()
 
-    # 章节分割
-    sections = []
-    headings = list(HEADING_RE.finditer(raw))
-    for i, h in enumerate(headings):
-        level = len(h.group(1))
-        title_h = h.group(2).strip()
-        start = h.end()
-        end = headings[i+1].start() if i+1 < len(headings) else len(raw)
-        body = raw[start:end].strip()
-        sections.append((title_h, body))
+def _slice_sections(md: str) -> List[PaperSection]:
+    sections: List[PaperSection] = []
+    headings = [(m.start(), m.end(), len(m.group(1)), m.group(2).strip()) for m in HEADING_RE.finditer(md)]
+    if not headings:
+        imgs = [PaperImage(alt=a, url=u, context_heading=None) for a,u in IMAGE_RE.findall(md)]
+        return [PaperSection(level=1, title="全文", start=0, end=len(md), text=md, images=imgs)]
+    for i, (s, e, lvl, title) in enumerate(headings):
+        start = e
+        end = headings[i+1][0] if i+1 < len(headings) else len(md)
+        block = md[start:end]
+        imgs = []
+        for a,u in IMAGE_RE.findall(block):
+            imgs.append(PaperImage(alt=a, url=u, context_heading=title))
+        sections.append(PaperSection(level=lvl, title=title, start=start, end=end, text=block.strip(), images=imgs))
+    return sections
 
-    # 图片与所在章节
-    figures = []
-    for sect_idx, (hname, body) in enumerate(sections):
-        for m in IMG_RE.finditer(body):
-            alt, url = m.group(1).strip(), m.group(2).strip()
-            cap = ""
-            # 尝试在图片行后 2 行内找“Figure”/“图”描述
-            post = body[m.end():].splitlines()[:2]
-            joined = " ".join(post)
-            figcap = re.search(r"(?i)(figure|图|caption)[:：]?\s*(.+?)(?:$|\n)", joined)
-            if figcap:
-                cap = figcap.group(2).strip()
-            ctx = [hname]
-            figures.append(Figure(alt=alt or hname, url=url, caption=cap, context_headings=ctx))
+def parse_markdown(md_text: str) -> ParsedPaper:
+    title = _extract_title(md_text)
+    authors = _extract_authors(md_text)
+    abstract = _extract_abstract(md_text)
+    sections = _slice_sections(md_text)
+    images = []
+    for s in sections: images.extend(s.images)
+    return ParsedPaper(title=title, authors=authors, abstract=abstract, sections=sections, images=images, raw_text=md_text)
 
-    # 参考文献区
-    references = ""
-    ref_idx = None
-    for i, (hname, _) in enumerate(sections):
-        if re.search(r"(?i)\b(references|bibliography)\b", hname):
-            ref_idx = i
-            break
-    if ref_idx is not None:
-        references = sections[ref_idx][1]
-
-    return ParsedMD(
-        title=title or "（未命名论文）",
-        authors=authors,
-        abstract=abstract,
-        sections=sections,
-        figures=figures,
-        references=references,
-        raw_text=raw
-    )
-
-# ----------------------------
-# 2) 深度分析（启发式 + 规则）
-# ----------------------------
-
-def _grep_items(text: str, patterns: List[str]) -> List[str]:
-    hits = []
-    for p in patterns:
-        for m in re.finditer(p, text, flags=re.I):
-            span = text[max(0, m.start()-240): m.end()+240]
-            frag = re.sub(r"\s+", " ", span).strip()
-            if frag not in hits:
-                hits.append(frag)
-    return hits[:8]
-
-def analyze_structure(p: ParsedMD) -> Analysis:
-    all_text = p.raw_text
-
-    # 问题/动机
-    problem = ""
-    motivation = ""
-    intro = ""
-    for name, body in p.sections:
-        if re.search(r"(?i)\b(introduction|背景|概述)\b", name):
-            intro = body
-            break
-    if not intro and p.abstract:
-        intro = p.abstract
-
-    if intro:
-        # 取前几句
-        first_para = intro.strip().split("\n\n")[0]
-        problem = first_para.strip()
-        motivation = "该工作旨在缓解/改进现有推荐检索阶段的瓶颈、冷启动与多样性等问题（由正文抽取），并以可生成的语义 ID 取代传统向量召回。"
-
-    # 贡献
-    contrib_patterns = [r"(?i)\bcontribution(s)?\b", r"我们(的)?主要(贡献|工作)"]
-    contributions = _grep_items(all_text, contrib_patterns)
-    if not contributions and p.abstract:
-        contributions = [p.abstract.strip()[:280] + "…"]
-
-    # 方法
-    method_highlevel = "整体框架基于“生成式检索 + 语义 ID（多级量化）+ 序列到序列 Transformer”，以自回归方式预测下一交互项的语义代码。"
-    method_patterns = [r"(?i)\bmethod(s)?\b", r"(?i)\bframework\b", r"(?i)\bRQ-?VAE\b", r"(?i)\bSemantic ID\b", r"(?i)\bT5|Transformer|decoder|encoder\b"]
-    method_details = _grep_items(all_text, method_patterns)
-
-    # 数据集/指标/实验/对比
-    datasets = re.findall(r"(?i)Amazon.*?(Beauty|Sports and Outdoors|Toys and Games)", all_text)
-    datasets = sorted(list(set(datasets)))
-    metric_patterns = [r"(?i)\bRecall@?\d+\b", r"(?i)\bNDCG@?\d+\b", r"(?i)\bAUC\b", r"(?i)\bprecision\b"]
-    metrics = _grep_items(all_text, metric_patterns)
-
-    baseline_patterns = [r"(?i)\bGRU4Rec\b", r"(?i)\bSASRec\b", r"(?i)\bBERT4Rec\b", r"(?i)\bS3-?Rec\b", r"(?i)\bCaser\b", r"(?i)\bFDSA\b", r"(?i)\bP5\b"]
-    baselines = [m.group(0) for pat in baseline_patterns for m in re.finditer(pat, all_text)]
-    baselines = sorted(list(set(baselines)))
-
-    exp_patterns = [r"(?i)\bexperiment(s)?\b", r"(?i)\bresults?\b", r"(?i)\bablation(s)?\b", r"(?i)\bcold[-\s]?start\b", r"(?i)\bdiversity\b"]
-    experiments = _grep_items(all_text, exp_patterns)
-
-    # 结果要点（从表格/结果段落近邻抽取）
-    results_takeaways = []
-    for name, body in p.sections:
-        if re.search(r"(?i)\b(result|performance|实验结果|性能)\b", name):
-            s = re.sub(r"\s+", " ", body).strip()
-            results_takeaways.append(s[:400] + ("…" if len(s) > 400 else ""))
-    if not results_takeaways and p.abstract:
-        results_takeaways = [p.abstract.strip()[:300] + "…"]
-
-    # 局限/风险/偏差
-    limitations = []
-    for name, body in p.sections:
-        if re.search(r"(?i)\b(limitation|discussion|限制|不足)\b", name):
-            limitations.append(re.sub(r"\s+", " ", body).strip()[:300] + "…")
-    if not limitations:
-        limitations = ["可能存在语义 ID 碰撞与无效 ID 的极小概率、对预训练内容编码器依赖、以及指标集中在三套 Amazon 基准上，外推性仍需验证。"]
-
-    risks_bias = ["推荐系统的反馈回路与流行度偏置可能被放大，需要通过语义 ID 与采样策略缓解。"]
-
-    # 消融
-    ablations = []
-    for name, body in p.sections:
-        if re.search(r"(?i)\b(ablation|消融)\b", name):
-            ablations.append(re.sub(r"\s+", " ", body).strip()[:300] + "…")
-
-    # 术语表（精简）
-    glossary = {
-        "语义 ID (Semantic ID)": "由内容表征量化得到的多级离散码，语义相近的物品将共享前缀。",
-        "RQ-VAE": "残差量化的变分自编码器，多级码本逐级量化潜变量，形成层次语义。",
-        "生成式检索": "序列到序列模型自回归地产出目标的离散 ID（而非向量近邻检索）。",
-        "TIGER": "Transformer Index for Generative Recommenders，本论文框架名。"
+# -------- 自适应属性检测 --------
+def detect_attrs(md: str) -> Dict[str, bool]:
+    low = md.lower()
+    flags = {
+        "is_survey": any(k in low for k in ["survey", "综述", "review of", "a review"]),
+        "is_dataset": any(k in low for k in ["dataset", "数据集", "benchmark", "基准", "leaderboard"]),
+        "is_system": any(k in low for k in ["system", "framework", "pipeline", "platform", "engine"]),
+        "is_method": any(k in low for k in ["we propose", "we present", "提出一种", "提出了", "方法", "approach"]),
+        "is_theory": any(k in low for k in ["theorem", "lemma", "proof", "证明", "bound", "上界", "下界"]),
+        "has_code": any(k in low for k in ["code", "github.com", "implementation", "开源代码"]),
+        "has_math": bool(re.search(r'(\$[^$]+\$|\$\$[\s\S]+?\$\$|\\begin\{equation\})', md)),
+        "has_algo": any(k in low for k in ["algorithm", "伪代码", "pseudo-code", "pseudocode"]),
+        "has_ablation": ("ablation" in low) or ("消融" in low),
+        "has_user_study": ("user study" in low) or ("用户研究" in low),
+        "is_multimodal": any(k in low for k in ["multimodal", "multi-modal", "vision-language", "ocr", "speech", "audio", "image", "图文", "语音", "视觉"]),
+        "has_safety": any(k in low for k in ["safety", "bias", "安全", "偏见", "ethic", "伦理"]),
+        "has_eval": any(k in low for k in ["evaluation", "experiment", "results", "实验", "评测"]),
+        "has_efficiency": any(k in low for k in ["latency", "throughput", "efficien", "效率", "显存", "memory", "复杂度", "complexity", "o("]),
+        "has_data_recipe": any(k in low for k in ["data collection", "数据收集", "curation", "标注", "annotation"]),
+        "domain_bridge": any(k in low for k in ["bridge", "桥梁", "结构健康监测", "structural health"]),
     }
+    # counts
+    flags["fig_count"] = len(re.findall(r'!\[[^\]]*\]\([^)]+\)', md))
+    flags["tbl_count"] = len(re.findall(r'^\s*\|', md, flags=re.MULTILINE))
+    return flags
 
-    # 图片锚点建议：把“方法/实验/消融”类图片放入对应段落
-    suggested_fig_anchors = {"方法原理": [], "实验与结果": [], "消融与讨论": []}
-    for idx, fig in enumerate(p.figures):
-        key = "方法原理" if re.search(r"(?i)overview|framework|RQ-?VAE|Semantic ID|TIGER", fig.alt + " " + fig.caption) else \
-              "实验与结果" if re.search(r"(?i)result|performance|table|recall|ndcg|cold", fig.alt + " " + fig.caption) else \
-              "消融与讨论"
-        suggested_fig_anchors.setdefault(key, []).append(idx)
+# -------- Prompt 生成（自适应） --------
+def extract_outline(sections: List[PaperSection], max_items=18) -> str:
+    rows = []
+    for s in sections:
+        rows.append(f"- [{'#'*s.level} {s.title} {s.text}]")
+    return "\n".join(rows) if rows else "（未检测到章节标题）"
 
-    return Analysis(
-        problem=problem or "（自动摘要未能抽取到清晰问题陈述，可依赖 LLM 补全）",
-        motivation=motivation,
-        contributions=contributions or ["（未显式列出，建议参考摘要与引言补全）"],
-        method_highlevel=method_highlevel,
-        method_details=method_details,
-        datasets=datasets or [],
-        metrics=metrics or [],
-        experiments=experiments or [],
-        baselines=baselines or [],
-        results_takeaways=results_takeaways or [],
-        limitations=limitations,
-        risks_bias=risks_bias,
-        ablations=ablations or [],
-        future_work=["将层次语义 ID 融入排序、多目标优化与跨域冷启动；设计前缀匹配容错的生成式检索解码器；评估在更大规模 corpus 上的效率-效果权衡。"],
-        glossary=glossary,
-        suggested_fig_anchors=suggested_fig_anchors
-    )
+def build_image_inventory(images: List[PaperImage], max_items:int=30) -> str:
+    rows = []
+    for i, im in enumerate(images[:max_items], 1):
+        rows.append(f"{i}. ({im.context_heading or '全文'}) {im.alt or 'figure'} → {im.url}")
+    return "\n".join(rows) if rows else "（源文未检测到图片链接）"
 
-# ----------------------------
-# 3) 生成“深度解读 Prompt”（中文）
-# ----------------------------
+def generate_adaptive_prompt(parsed: ParsedPaper) -> str:
+    attrs = detect_attrs(parsed.raw_text)
+    outline = extract_outline(parsed.sections)
+    images  = build_image_inventory(parsed.images)
 
-PROMPT_TMPL = """你是一名顶级学术评审与系统工程师。请基于下述论文 Markdown 内容，严格按“中文”输出一篇面向高级工程读者的【深度解读报告】。请做到：
-- 先以一句话给出论文最核心洞见；随后按“背景/问题 → 方法框架 → 关键技术细节 → 实验设计与指标 → 结果&对比 → 消融 → 局限与风险 → 工程落地建议 → 未来方向”的结构分节撰写。
-- 对“方法框架”请画出模块化要点列表；用公式或伪代码刻画关键环节（若原文给出）。
-- 对“结果&对比”，请量化列出主要指标（例如 Recall@K, NDCG@K），并解读效应来源与统计显著性。
-- 所有图示请引用【原文图片链接】，在合适段落以“图：描述（链接）”行内嵌入。
-- 需要时可穿插要点清单与表格，但全文避免空洞总结。
-- 语气专业简洁，避免套话。
+    sections = ["1. 论文速览（1 句问题定义 + 3 句贡献）"]
+    if attrs["is_survey"]:
+        sections += [
+            "2. 综述脉络与分类标准（时间线/任务线/方法线）",
+            "3. 代表性方法纵览（按分类，每类 3–5 篇，对比优缺点与适用场景）",
+            "4. 评测与结论一致性复核（不同实验设置的稳定性/争议点/复现记录）"
+        ]
+    else:
+        sections += [
+            "2. 背景与相关工作定位（对比 3–5 篇最相关研究）",
+            "3. 方法总览（系统图/数据流/符号表；内联源图链接）",
+        ]
+        if attrs["is_theory"] or attrs["has_math"]:
+            sections.append("4. 关键理论与推导（定理/假设/证明直觉；复杂度或收敛性）")
+        else:
+            sections.append("4. 关键技术细节（模块/损失/复杂度/训练细节/消融假设）")
 
-【论文关键信息（解析器抽取）】
-- 题目：{title}
-- 作者：{authors}
-- 摘要（摘录）：{abstract_excerpt}
+    if attrs["has_eval"]:
+        sections.append("5. 实验与结果复核（数据集/指标/SOTA/统计显著性；结论与边界）")
+    if attrs["has_ablation"]:
+        sections.append("6. 消融与误差分析（失败类型与成因；可改进方向）")
+    else:
+        sections.append("6. 误差分析与失败案例（为何失败、失败分布、可视化）")
 
-【重要上下文（解析器分析）】
-- 研究动机：{motivation}
-- 主要贡献（候选）：{contribs}
-- 高层方法框架：{method_hl}
-- 关键技术片段（候选）：{method_details}
-- 数据集：{datasets}
-- 指标：{metrics}
-- 典型对比基线：{baselines}
-- 结果要点（候选）：{results}
-- 局限/偏差：{limits}
-- 消融（候选）：{ablations}
-- 术语表：{glossary}
+    if attrs["is_dataset"] or attrs["has_data_recipe"]:
+        sections.append("7. 数据/基准构建与清洗（采集→标注→质控→隐私合规；分层划分与泄漏排查）")
+    else:
+        sections.append("7. 可复现清单（环境/数据/脚本/关键超参/评测命令）")
 
-【原文图片（供内联引用）】
-{figs}
+    if attrs["has_efficiency"] or attrs["is_system"]:
+        sections.append("8. 工程效率与资源占用（延迟/吞吐/显存；推理加速与代价）")
+    else:
+        sections.append("8. 局限与风险（学术/伦理/合规/部署）")
 
-请在写作中恰当引用这些图片链接（不要下载），并按上述结构输出中文深度解读报告。
+    if attrs["domain_bridge"]:
+        sections.append("9. 产业与应用建议（桥梁/结构健康监测落地清单：数据采集→上线监控→回滚策略）")
+    else:
+        sections.append("9. 产业与应用建议（可落地场景、投入产出、监控与回滚策略）")
+
+    sections += [
+        "10. 术语对照表（EN→ZH 简释）",
+        "11. 值得继续追问的 10 个高质量问题"
+    ]
+
+    layout = ["- 公式：Markdown+KaTeX；复杂推导给直觉解释"]
+    if attrs["fig_count"] >= 3:
+        layout.append("- 图片：仅使用源 URL，在“方法/实验”小节就地内联，图题含关键信息点")
+    if attrs["tbl_count"] >= 1:
+        layout.append("- 表格：SOTA/消融用 Markdown 表格；统一指标与小数位数")
+    if attrs["has_algo"]:
+        layout.append("- 若原文有伪代码：转写为更清晰的伪代码块并配注释")
+
+    prompt = f"""你是一名资深学术研究员与技术评审专家。请对下面论文做“深度解读”，输出**中文图文报告**（严格复用源 MD 的图片链接）。
+
+【标题】{parsed.title}
+【作者】{"；".join(parsed.authors) if parsed.authors else "（未解析到作者）"}
+【摘要】{parsed.abstract}
+
+【原文结构（截断展示）】
+{outline}
+
+【图片清单（来自源 MD）】
+{images}
+
+【必须包含的章节】
+""" + "\n".join(sections) + """
+
+【图文排版】
+""" + "\n".join(layout) + """
+
+【自适应策略】
+- 若检测到“理论/证明/复杂度”信号，优先给出定理与证明直觉，再回到工程可复现要点。
+- 若检测到“数据集/基准”，补充数据治理、泄漏风险、评测稳健性与复现实证。
+- 若检测到“系统/效率”，量化延迟/吞吐/显存曲线，并给出可复用的优化配方（如张量并行/显存优化/裁剪蒸馏）。
+- 若为“综述”，产出分类法、代表性工作对照矩阵与研究空白图谱。
+- 若与“桥梁/结构健康监测”等垂域相关，将方法映射到该域的业务指标与监管要求。
 """
-
-def build_deep_prompt(p: ParsedMD, a: Analysis) -> str:
-    def fmt_list(xs, sep="；"):
-        return sep.join(xs) if xs else "（未抽取）"
-    def fmt_figs(figs: List[Figure]) -> str:
-        lines = []
-        for i, f in enumerate(figs):
-            lines.append(f"- 图{i+1}：{f.alt or f.caption or '（无描述）'}  链接：{f.url}")
-        return "\n".join(lines) if lines else "（未检测到图片）"
-    abstract_excerpt = (p.abstract or "（未抽取摘要）").strip().replace("\n", " ")
-    prompt = PROMPT_TMPL.format(
-        title=p.title,
-        authors="、".join(p.authors) if p.authors else "（未抽取）",
-        abstract_excerpt=abstract_excerpt[:600] + ("…" if len(abstract_excerpt) > 600 else ""),
-        motivation=a.motivation,
-        contribs=fmt_list(a.contributions),
-        method_hl=a.method_highlevel,
-        method_details=fmt_list(a.method_details),
-        datasets=fmt_list(a.datasets, sep="，"),
-        metrics=fmt_list(a.metrics, sep="，"),
-        baselines=fmt_list(a.baselines, sep="，"),
-        results=fmt_list(a.results_takeaways),
-        limits=fmt_list(a.limitations),
-        ablations=fmt_list(a.ablations),
-        glossary=json.dumps(a.glossary, ensure_ascii=False, indent=2),
-        figs=fmt_figs(p.figures)
-    )
     return prompt
 
-# ----------------------------
-# 4) 可选 Web 检索增补（轻量实现，可替换）
-# ----------------------------
-
-def duckduckgo_search(query: str, max_results: int = 5, timeout: int = 12) -> List[Dict]:
-    """极简 DuckDuckGo HTML 解析（无需 API Key）。如需工业级，请替换为自有检索模块。"""
-    url = "https://duckduckgo.com/html"
+# ------- WebSearch -------
+def websearch(query: str, provider: str = "bing", topk: int = 5) -> List[Tuple[str,str,str]]:
+    out: List[Tuple[str,str,str]] = []
     try:
-        r = requests.post(url, data={"q": query}, timeout=timeout, headers={"User-Agent": "Mozilla/5.0"})
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "html5lib")
-        items = []
-        for a in soup.select(".result__a")[:max_results]:
-            href = a.get("href", "")
-            title = a.get_text(" ", strip=True)
-            snippet_tag = a.find_parent("div", class_="result__body").select_one(".result__snippet")
-            snippet = snippet_tag.get_text(" ", strip=True) if snippet_tag else ""
-            items.append({"title": title, "link": href, "snippet": snippet})
-        return items
-    except Exception as e:
+        if provider == "bing":
+            key = os.environ.get("BING_SEARCH_KEY")
+            if not key or not requests: return []
+            endpoint = "https://api.bing.microsoft.com/v7.0/search"
+            r = requests.get(endpoint, params={"q": query, "count": topk, "mkt":"en-US"}, headers={"Ocp-Apim-Subscription-Key": key}, timeout=20)
+            r.raise_for_status()
+            j = r.json()
+            for it in j.get("webPages", {}).get("value", []):
+                out.append((it.get("name",""), it.get("url",""), it.get("snippet","")))
+        elif provider == "serpapi":
+            key = os.environ.get("SERPAPI_KEY")
+            if not key or not requests: return []
+            r = requests.get("https://serpapi.com/search.json", params={"engine":"google","q":query,"api_key":key}, timeout=20)
+            r.raise_for_status()
+            j = r.json()
+            for it in j.get("organic_results", [])[:topk]:
+                out.append((it.get("title",""), it.get("link",""), it.get("snippet","")))
+    except Exception:
         return []
+    return out[:topk]
 
-def build_web_evidence(p: ParsedMD, a: Analysis, max_each: int = 3) -> Dict[str, List[Dict]]:
-    queries = []
-    # 场景化检索词
-    queries.append(f"{p.title} paper TIGER generative retrieval Semantic ID")
-    queries.append("RQ-VAE residual quantization recommender system")
-    if a.baselines:
-        queries.append(" ".join(a.baselines[:4]) + " sequential recommendation benchmarks")
-    evidence = {}
-    for q in queries:
-        evidence[q] = duckduckgo_search(q, max_results=max_each)
-    return evidence
+def weave_web_results_to_prompt(prompt: str, topics: List[str], provider: str) -> str:
+    lines = []
+    for q in topics:
+        items = websearch(q, provider=provider, topk=5)
+        if not items: 
+            continue
+        lines.append(f"- 主题：{q}")
+        for (t,u,s) in items:
+            lines.append(f"  - [{t}]({u}) — {s}")
+    if not lines:
+        return prompt
+    return prompt + "\n\n【WebSearch 增强材料】\n" + "\n".join(lines)
 
-# ----------------------------
-# 5) 生成中文图文报告（Markdown）
-# ----------------------------
+# ------- LLM -------
+class LLMAdapter:
+    def generate(self, prompt: str) -> str:
+        raise NotImplementedError
 
-def render_markdown_report(p: ParsedMD, a: Analysis, deep_prompt: str,
-                           web_evi: Optional[Dict[str, List[Dict]]] = None) -> str:
-    def fig_block(indices: List[int]) -> str:
-        if not indices: return ""
-        lines = []
-        for i in indices:
-            if 0 <= i < len(p.figures):
-                f = p.figures[i]
-                lines.append(f"图：{f.alt or f.caption or '（无描述）'}（{f.url}）")
-        return "\n".join(lines)
+class OpenAIAdapter(LLMAdapter):
+    def __init__(self, model: str = "gpt-5.0-instruct", base_url: Optional[str]=None):
+        self.model = "Qwen3-30B-A3B-Instruct-2507"
+        self.base_url = base_url or os.environ.get("LOCAL_QWEN3_INSTRUCT_BASE", "https://api.openai.com/v1")
+        self.api_key = os.environ.get("OPENAI_API_KEY")
 
-    # 首图优先插入“方法原理”建议图
-    method_figs = a.suggested_fig_anchors.get("方法原理", [])
-    exp_figs = a.suggested_fig_anchors.get("实验与结果", [])
-    abl_figs = a.suggested_fig_anchors.get("消融与讨论", [])
+    def generate(self, prompt: str) -> str:
+        if not requests:
+            return "【占位】requests 未安装，无法直接联网调用。请复制 prompt 到你的模型中运行。"
+        if not self.api_key:
+            return "【占位】未提供 OPENAI_API_KEY。请复制 prompt 到你的模型中运行。"
+        try:
+            headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type":"application/json"}
+            data = {
+                "model": self.model,
+                "messages": [
+                    {"role":"system","content":"You are a meticulous Chinese academic reviewer who writes structured Markdown and keeps image links intact."},
+                    {"role":"user","content": prompt}
+                ],
+                "temperature": 0.3
+            }
+            resp = requests.post(f"{self.base_url}/chat/completions", headers=headers, json=data, timeout=120)
+            resp.raise_for_status()
+            j = resp.json()
+            return j["choices"][0]["message"]["content"]
+        except Exception as e:
+            return f"【占位】OpenAI 调用失败：{e}\n请复制 prompt 手动到模型中生成。"
 
-    # Web 证据块
-    web_md = ""
-    if web_evi:
-        web_md = "\n\n### 相关资料与外部证据（精选）\n"
-        for q, items in web_evi.items():
-            if not items: continue
-            web_md += f"\n- **检索式**：`{q}`\n"
-            for it in items:
-                web_md += f"  - [{it['title']}]({it['link']}) — {it['snippet']}\n"
+class GeminiAdapter(LLMAdapter):
+    def __init__(self, model: str = "gemini-2.0-pro"):
+        self.model = model
+        self.api_key = os.environ.get("GEMINI_API_KEY")
 
-    # 报告 Markdown
-    md_lines = []
-    md_lines.append(f"# {p.title} — 深度解读报告")
-    md_lines.append("")
-    md_lines.append(f"**作者**：{'、'.join(p.authors) if p.authors else '（未抽取）'}")
-    md_lines.append(f"**摘要**：{p.abstract.strip() if p.abstract else '（未抽取）'}")
-    md_lines.append("")
-    if method_figs:
-        md_lines.append(fig_block(method_figs[:2]))
-        md_lines.append("")
+    def generate(self, prompt: str) -> str:
+        if not requests:
+            return "【占位】requests 未安装，无法直接联网调用。"
+        if not self.api_key:
+            return "【占位】未提供 GEMINI_API_KEY。"
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={self.api_key}"
+            data = {"contents":[{"parts":[{"text": prompt}]}]}
+            resp = requests.post(url, json=data, timeout=120)
+            resp.raise_for_status()
+            j = resp.json()
+            return j["candidates"][0]["content"]["parts"][0]["text"]
+        except Exception as e:
+            return f"【占位】Gemini 调用失败：{e}"
 
-    # 一句话洞见
-    md_lines.append("## 一句话洞见")
-    md_lines.append("以“语义 ID + 生成式检索”替代传统向量召回，使推荐检索可**直接自回归预测候选**，兼顾**冷启动泛化**与**多样性可控**。")
+class DoubaoAdapter(LLMAdapter):
+    def __init__(self, model: str = "ep-20240601-doubao-pro"):
+        self.model = model
+        self.api_key = os.environ.get("DOUBAO_API_KEY")
+        self.base_url = os.environ.get("DOUBAO_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3")
 
-    # 背景/问题
-    md_lines.append("\n## 背景与问题")
-    md_lines.append(a.problem or a.motivation)
+    def generate(self, prompt: str) -> str:
+        if not requests:
+            return "【占位】requests 未安装，无法直接联网调用。"
+        if not self.api_key:
+            return "【占位】未提供 DOUBAO_API_KEY。"
+        try:
+            url = f"{self.base_url}/chat/completions"
+            headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type":"application/json"}
+            data = {"model": self.model, "messages": [{"role":"user","content":prompt}], "temperature":0.3}
+            resp = requests.post(url, json=data, headers=headers, timeout=120)
+            resp.raise_for_status()
+            j = resp.json()
+            if "choices" in j and j["choices"]:
+                msg = j["choices"][0].get("message", {}).get("content") or j["choices"][0].get("text","")
+                return msg or "（空响应）"
+            return json.dumps(j, ensure_ascii=False)
+        except Exception as e:
+            return f"【占位】豆包调用失败：{e}"
 
-    # 方法框架
-    md_lines.append("\n## 方法框架（模块化）")
-    md_lines.append(a.method_highlevel)
-    if a.method_details:
-        md_lines.append("\n**关键技术片段（候选抽取）**：")
-        for it in a.method_details[:8]:
-            md_lines.append(f"- {it}")
+def pick_adapter(model_name: str) -> Optional[LLMAdapter]:
+    m = (model_name or "none").lower()
+    if m.startswith("gpt"): return OpenAIAdapter()
+    if "gemini" in m: return GeminiAdapter()
+    if "doubao" in m or "byte" in m: return DoubaoAdapter()
+    return None
 
-    if method_figs:
-        md_lines.append("\n**方法相关图示**：")
-        md_lines.append(fig_block(method_figs))
+# ------- 图片注入 -------
+def choose_images_by_keyword(images: List[PaperImage], keywords: List[str], max_count:int=4) -> List[str]:
+    picked = []
+    for kw in keywords:
+        for im in images:
+            ctx = (im.context_heading or "").lower() + " " + (im.alt or "").lower()
+            if kw in ctx and im.url not in picked:
+                picked.append(im.url)
+                if len(picked) >= max_count: return picked
+    if not picked:
+        for im in images[:max_count]: picked.append(im.url)
+    return picked
 
-    # 实验与指标
-    md_lines.append("\n## 实验设计与指标")
-    md_lines.append(f"- **数据集**：{('、'.join(a.datasets)) if a.datasets else '（未显式抽取）'}")
-    md_lines.append(f"- **指标**：{('、'.join([re.sub(r'\\s+', ' ', x) for x in a.metrics])) if a.metrics else 'Recall@K, NDCG@K 等'}")
-    if exp_figs:
-        md_lines.append("\n**实验相关图表**：")
-        md_lines.append(fig_block(exp_figs))
+def render_img_md(urls: List[str]) -> str:
+    if not urls: return "（无）"
+    return "\n".join([f"![]({u})" for u in urls])
 
-    # 结果与对比
-    md_lines.append("\n## 结果与对比（要点）")
-    for it in a.results_takeaways[:6]:
-        md_lines.append(f"- {it}")
-    if a.baselines:
-        md_lines.append(f"\n**对比基线**：{', '.join(a.baselines)}")
+REPORT_SKELETON_TMPL = """# {title} — 深度解读
 
-    # 消融
-    md_lines.append("\n## 消融与机制洞察")
-    if a.ablations:
-        for it in a.ablations[:5]:
-            md_lines.append(f"- {it}")
-    else:
-        md_lines.append("- 原文包含层数、用户 token、量化方式等消融，可据表格复现。")
-    if abl_figs:
-        md_lines.append("\n**消融相关图表**：")
-        md_lines.append(fig_block(abl_figs))
+> 生成时间：{ts}
 
-    # 局限与风险
-    md_lines.append("\n## 局限与风险")
-    for it in a.limitations:
-        md_lines.append(f"- {it}")
-    for it in a.risks_bias:
-        md_lines.append(f"- {it}")
+## 1. 论文速览
+（占位）一句话问题定义；三句话贡献。
 
-    # 工程落地建议
-    md_lines.append("\n## 工程落地建议")
-    md_lines.append("- 以内容编码器（如 Sentence-T5）抽取语义表征，采用 RQ-VAE 学得多级码本，生成前缀共享的语义 ID。")
-    md_lines.append("- 推断阶段使用 Seq2Seq 解码预测语义 ID，必要时做**前缀容错/近邻补全**，过滤无效 ID。")
-    md_lines.append("- 对**冷启动**：允许一定比例 unseen items 的前缀匹配召回；对**多样性**：用温度采样控制不同层级 token。")
-    md_lines.append("- 监控**无效 ID 率**、**码本使用率**与**召回/排序耦合**的系统指标。")
+## 2. 背景与相关工作定位
+（占位）对比近 3 年 3–5 篇相关研究。
 
-    # 未来方向
-    md_lines.append("\n## 未来方向")
-    for it in a.future_work:
-        md_lines.append(f"- {it}")
+## 3. 方法总览
+（占位）系统图/数据流/符号表。若原文有图，内联如下：
+{method_imgs}
 
-    # 术语表
-    md_lines.append("\n## 术语表")
-    for k, v in a.glossary.items():
-        md_lines.append(f"- **{k}**：{v}")
+## 4. 关键技术细节
+（占位）核心模块、损失、复杂度、训练细节、消融假设。
 
-    # 外部证据
-    md_lines.append(web_md)
+## 5. 实验与结果复核
+（占位）数据集、指标、SOTA 对比、统计显著性；结论与边界。
+{exp_imgs}
 
-    # Prompt 附录
-    md_lines.append("\n---\n### 附录：自动生成的深度解读 Prompt（可投喂 LLM）\n")
-    md_lines.append("```\n" + deep_prompt + "\n```")
+## 6. 误差分析与失败案例
+（占位）失败类型与可能原因。
 
-    return "\n".join(md_lines)
+## 7. 可复现清单
+（占位）环境/数据/脚本/关键超参/评测指令。
 
-# ----------------------------
-# 6) 对外主函数
-# ----------------------------
+## 8. 局限性与潜在风险
+（占位）学术/伦理/合规/部署。
 
-def generate_deep_report(
-    md_path: str,
-    use_web: bool = False,
-    custom_search: Optional[Callable[[str, int], List[Dict]]] = None
-) -> Dict[str, str]:
-    """
-    输入：
-      md_path: 论文 Markdown 路径（需包含正文与原图链接）
-      use_web: 是否启用内置 DuckDuckGo 轻量检索
-      custom_search: 可选，自定义检索函数 (query, max_results)->List[Dict]
-    返回：
-      {"prompt": ..., "report_markdown": ...}
-    """
-    parsed = parse_markdown(md_path)
-    analysis = analyze_structure(parsed)
-    prompt = build_deep_prompt(parsed, analysis)
+## 9. 产业与应用建议
+（占位）可落地场景、投入产出、监控与回滚策略。
 
-    web_evi = None
-    if use_web:
-        if custom_search:
-            # 用外部检索器
-            web_evi = {}
-            for q in [parsed.title, "RQ-VAE recommender", "generative retrieval recommendation"]:
-                web_evi[q] = custom_search(q, 5)
+## 10. 关键术语对照表
+| 英文 | 中文 | 说明 |
+|---|---|---|
+|  |  |  |
+
+## 11. 值得继续追问的 10 个高质量问题
+1. （占位）
+2. …
+
+---
+
+### 附：原文图片参考（自动收集）
+{all_imgs}
+"""
+
+def build_report_skeleton(parsed: ParsedPaper) -> str:
+    method_imgs = render_img_md(choose_images_by_keyword(parsed.images, ["overview","method","architecture","framework","模型","方法"]))
+    exp_imgs    = render_img_md(choose_images_by_keyword(parsed.images, ["experiment","results","ablation","消融","性能","实验"]))
+    all_imgs    = render_img_md([im.url for im in parsed.images[:20]])
+    return REPORT_SKELETON_TMPL.format(
+        title=parsed.title,
+        ts=datetime.now().strftime("%Y-%m-%d %H:%M"),
+        method_imgs=method_imgs,
+        exp_imgs=exp_imgs,
+        all_imgs=all_imgs
+    )
+
+def inject_images_into_sections(markdown_text: str, parsed: ParsedPaper) -> str:
+    needles = {
+        "方法": choose_images_by_keyword(parsed.images, ["overview","method","architecture","framework","模型","方法"], 3),
+        "实验": choose_images_by_keyword(parsed.images, ["experiment","results","ablation","消融","性能","实验"], 3),
+    }
+    out = markdown_text
+    for key, urls in needles.items():
+        if not urls: continue
+        pat = re.compile(rf'(^##\s*[^\n]*{key}[^\n]*\n)', re.MULTILINE)
+        if not pat.search(out):
+            out = f"{render_img_md(urls)}\n\n" + out
         else:
-            web_evi = build_web_evidence(parsed, analysis)
+            out = pat.sub(lambda m: m.group(1) + render_img_md(urls) + "\n\n", out, count=1)
+    return out
 
-    report_md = render_markdown_report(parsed, analysis, prompt, web_evi)
-    return {"prompt": prompt, "report_markdown": report_md}
+# ------- 主流程 -------
+def run(md_path: str, out_dir: str, model: str="none", use_websearch: bool=False, search_provider: str="bing", adaptive: bool=True) -> Dict[str,str]:
+    os.makedirs(out_dir, exist_ok=True)
+    with open(md_path, "r", encoding="utf-8", errors="ignore") as f:
+        md = f.read()
 
-# ----------------------------
-# 7) CLI
-# ----------------------------
+    parsed = parse_markdown(md)
+    if adaptive:
+        prompt = generate_adaptive_prompt(parsed)
+        prompt_name = "prompt_adaptive_zh.txt"
+    else:
+        # 简化版固定 Prompt（少用）
+        outline = "\n".join([f"- [{'#'*s.level} {s.title}]" for s in parsed.sections]) or "（未检测到章节标题）"
+        images  = build_image_inventory(parsed.images)
+        prompt = f"""你是一名资深学术研究员与技术评审专家。请对下面论文做“深度解读”，输出**中文图文报告**（严格复用源 MD 的图片链接）。
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("md_path", type=str, help="论文 Markdown 文件路径")
-    parser.add_argument("--out", type=str, default="", help="输出报告 Markdown 路径")
-    parser.add_argument("--with-web", action="store_true", help="启用轻量 Web 检索")
-    args = parser.parse_args()
+【标题】{parsed.title}
+【作者】{"；".join(parsed.authors) if parsed.authors else "（未解析到作者）"}
+【摘要】{parsed.abstract}
 
-    out = generate_deep_report(args.md_path, use_web=args.with_web)
-    out_path = args.out or (os.path.splitext(args.md_path)[0] + "_deep_report.md")
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write(out["report_markdown"])
-    # 另存一份 prompt 便于调用大模型
-    with open(os.path.splitext(out_path)[0] + "_prompt.txt", "w", encoding="utf-8") as f:
-        f.write(out["prompt"])
-    print(f"[OK] 已输出报告：{out_path}")
-    print(f"[OK] 已输出 Prompt：{os.path.splitext(out_path)[0]}_prompt.txt")
+【原文结构（截断展示）】
+{outline}
+
+【图片清单（来自源 MD）】
+{images}
+"""
+        prompt_name = "prompt_zh.txt"
+
+    # WebSearch 增强（可选）
+    if use_websearch:
+        topics = [
+            f"{parsed.title} 复现",
+            "related work 2023..2025",
+            "ablation study methodology for this topic"
+        ]
+        prompt = weave_web_results_to_prompt(prompt, topics, provider=search_provider)
+
+    # 保存 prompt
+    prompt_path = os.path.join(out_dir, prompt_name)
+    with open(prompt_path, "w", encoding="utf-8") as f:
+        f.write(prompt)
+
+    # 调用模型或输出骨架
+    report_path = os.path.join(out_dir, "report_zh.md")
+    adapter = pick_adapter(model)
+    if adapter is None:
+        content = build_report_skeleton(parsed)
+    else:
+        llm_md = adapter.generate(prompt)
+        content = llm_md if llm_md and llm_md.strip() else build_report_skeleton(parsed)
+        content = inject_images_into_sections(content, parsed)
+
+    with open(report_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+    # 另存解析结构
+    meta_path = os.path.join(out_dir, "parsed_meta.json")
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump({
+            "title": parsed.title,
+            "authors": parsed.authors,
+            "abstract": parsed.abstract[:1000],
+            "sections": [{"level": s.level, "title": s.title, "len": len(s.text), "images": [im.url for im in s.images]} for s in parsed.sections],
+            "images": [{"alt": im.alt, "url": im.url, "ctx": im.context_heading} for im in parsed.images]
+        }, f, ensure_ascii=False, indent=2)
+
+    return {"prompt_path": prompt_path, "report_path": report_path, "meta_path": meta_path}
 
 if __name__ == "__main__":
-    main()
+    # parser = argparse.ArgumentParser()
+    # parser.add_argument("--md", required=True, help="论文 MD 路径")
+    # parser.add_argument("--out_dir", required=True, help="输出目录")
+    # parser.add_argument("--model", default="none", help="gpt5 / gemini / doubao / none")
+    # parser.add_argument("--use_websearch", default="false", choices=["true","false"])
+    # parser.add_argument("--search_provider", default="bing", choices=["bing","serpapi"])
+    # parser.add_argument("--adaptive", default="true", choices=["true","false"], help="是否使用自适应 Prompt")
+    # args = parser.parse_args()
+    md_path = "hf_papers/2305.03043/2305.03043.md"
+    with_web = False
+    md_out = "hf_papers/2305.03043/2305.03043_report.md"
+    res = run(md_path, md_out, "gpt", False, "sdsds",True)
+    # res = run(args.md, args.out_dir, args.model, args.use_websearch.lower()=="true", args.search_provider, args.adaptive.lower()=="true")
+    print(json.dumps(res, ensure_ascii=False, indent=2))
