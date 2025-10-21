@@ -302,6 +302,7 @@ def donwload_md_to_local(paper_id: str,is_local=False) -> Optional[str]:
                 return data
     else:
         print(f"{key} is no exist")
+        return None
 
 
 def upload_pdf_to_oss(file_path: str, paper_id: str) -> Optional[str]:
@@ -412,7 +413,7 @@ class PaperFileDownloadAndParser:
         
         
 if __name__ == "__main__":
-    paper_id = PaperFileDownloadAndParser.get_papers_id_list()[:20]
+    paper_id = PaperFileDownloadAndParser.get_papers_id_list()[:100]
     pdf_file_root = "hf_papers"
     for pid in paper_id:
         result = PaperFileDownloadAndParser.parse(pid)

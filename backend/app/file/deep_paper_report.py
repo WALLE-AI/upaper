@@ -11,7 +11,9 @@ paper_deep_reader.py
 
 import os, re, json, argparse
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Callable, Tuple
+import sys
+import time
+from typing import Iterator, List, Dict, Optional, Callable, Tuple
 from datetime import datetime
 
 try:
@@ -130,7 +132,7 @@ def detect_attrs(md: str) -> Dict[str, bool]:
         "has_eval": any(k in low for k in ["evaluation", "experiment", "results", "实验", "评测"]),
         "has_efficiency": any(k in low for k in ["latency", "throughput", "efficien", "效率", "显存", "memory", "复杂度", "complexity", "o("]),
         "has_data_recipe": any(k in low for k in ["data collection", "数据收集", "curation", "标注", "annotation"]),
-        "domain_bridge": any(k in low for k in ["bridge", "桥梁", "结构健康监测", "structural health"]),
+        "domain": any(k in low for k in ["finance", "金融", "结构健康监测", "structural health","LLM","大语言模型","VLM","视觉大模型","Deepsearch","深度搜索","RAG","檢索增強生成","Agent","智能体"]),
     }
     # counts
     flags["fig_count"] = len(re.findall(r'!\[[^\]]*\]\([^)]+\)', md))
@@ -186,11 +188,8 @@ def generate_adaptive_prompt(parsed: ParsedPaper) -> str:
 
     if attrs["has_efficiency"] or attrs["is_system"]:
         sections.append("8. 工程效率与资源占用（延迟/吞吐/显存；推理加速与代价）")
-    else:
-        sections.append("8. 局限与风险（学术/伦理/合规/部署）")
-
-    if attrs["domain_bridge"]:
-        sections.append("9. 产业与应用建议（桥梁/结构健康监测落地清单：数据采集→上线监控→回滚策略）")
+    if attrs["domain"]:
+        sections.append("9. 产业与应用建议（可落地场景、投入产出、监控与回滚策略）")
     else:
         sections.append("9. 产业与应用建议（可落地场景、投入产出、监控与回滚策略）")
 
@@ -276,34 +275,126 @@ def weave_web_results_to_prompt(prompt: str, topics: List[str], provider: str) -
 class LLMAdapter:
     def generate(self, prompt: str) -> str:
         raise NotImplementedError
+    def generate_stream(self, prompt: str) -> str:
+        raise NotImplementedError
 
 class OpenAIAdapter(LLMAdapter):
-    def __init__(self, model: str = "gpt-5.0-instruct", base_url: Optional[str]=None):
-        self.model = "Qwen3-30B-A3B-Instruct-2507"
+    """
+    - generate(prompt) -> str：一次性返回完整结果（与你原来的行为一致）
+    - generate_stream(prompt) -> Iterator[str]：流式逐块产出内容（适合前端/CLI边收边显）
+    """
+
+    def __init__(self,
+                 model: str = "Qwen3-30B-A3B-Instruct-2507",
+                 base_url: Optional[str] = None,
+                 timeout: float = 120.0):
+        # 可外部覆盖模型名；默认仍指向你的 Qwen3 Instruct
+        self.model = model
         self.base_url = base_url or os.environ.get("LOCAL_QWEN3_INSTRUCT_BASE")
         self.api_key = os.environ.get("OPENAI_API_KEY")
+        self.timeout = timeout  # 连接+读取超时（下方会拆成(connect, read)）
 
+    # -------- 非流式：一次性返回 ----------
     def generate(self, prompt: str) -> str:
         if not requests:
             return "【占位】requests 未安装，无法直接联网调用。请复制 prompt 到你的模型中运行。"
         if not self.api_key:
             return "【占位】未提供 OPENAI_API_KEY。请复制 prompt 到你的模型中运行。"
         try:
-            headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type":"application/json"}
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            }
             data = {
                 "model": self.model,
                 "messages": [
-                    {"role":"system","content":"You are a meticulous Chinese academic reviewer who writes structured Markdown and keeps image links intact."},
-                    {"role":"user","content": prompt}
+                    {"role": "system", "content": "You are a meticulous Chinese academic reviewer who writes structured Markdown and keeps image links intact."},
+                    {"role": "user", "content": prompt}
                 ],
-                "temperature": 0.3
+                "temperature": 0.3,
+                "stream": False
             }
-            resp = requests.post(f"{self.base_url}/chat/completions", headers=headers, json=data, timeout=120)
+            url = f"{self.base_url}/chat/completions"
+            # 为了更稳健，显式区分连接超时与读取超时
+            resp = requests.post(url, headers=headers, json=data,
+                                 timeout=(10, self.timeout))
             resp.raise_for_status()
             j = resp.json()
             return j["choices"][0]["message"]["content"]
         except Exception as e:
             return f"【占位】OpenAI 调用失败：{e}\n请复制 prompt 手动到模型中生成。"
+
+    # -------- 流式：逐块产出 ----------
+    def generate_stream(self, prompt: str) -> Iterator[str]:
+        """
+        使用方式：
+            adapter = OpenAIAdapter()
+            for chunk in adapter.generate_stream("你好"):
+                print(chunk, end="", flush=True)
+        """
+        if not requests:
+            yield "【占位】requests 未安装，无法直接联网调用。请复制 prompt 到你的模型中运行。"
+            return
+        if not self.api_key:
+            yield "【占位】未提供 OPENAI_API_KEY。请复制 prompt 到你的模型中运行。"
+            return
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            # 有些网关对 SSE 更友好地返回（可选）
+            "Accept": "text/event-stream",
+        }
+        data = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": "You are a meticulous Chinese academic reviewer who writes structured Markdown and keeps image links intact."},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.3,
+            "stream": True
+        }
+        url = f"{self.base_url}/chat/completions"
+
+        try:
+            with requests.post(url, headers=headers, json=data,
+                               stream=True, timeout=(10, self.timeout)) as resp:
+                resp.raise_for_status()
+
+                # iter_lines 会按行（\n）拆分 SSE；decode_unicode=True 自动解码为 str
+                for raw_line in resp.iter_lines(decode_unicode=True):
+                    if not raw_line:
+                        # 心跳/空行，忽略
+                        continue
+
+                    # 典型行形如：data: {json...}
+                    if raw_line.startswith("data:"):
+                        payload = raw_line[len("data:"):].strip()
+                        if payload == "[DONE]":
+                            break
+                        # 解析 JSON，并按 OpenAI SSE 的 delta 结构取内容
+                        try:
+                            j = requests.utils.json.loads(payload)
+                            # OpenAI/兼容返回格式：
+                            # j["choices"][0]["delta"]["content"]（流式）
+                            # 或 fallback: j["choices"][0]["message"]["content"]（个别实现可能直接给整段）
+                            choices = j.get("choices") or []
+                            if choices:
+                                delta = choices[0].get("delta") or {}
+                                if "content" in delta and delta["content"] is not None:
+                                    yield delta["content"]
+                                else:
+                                    # 个别兼容实现可能把片段塞在 message.content
+                                    msg = choices[0].get("message") or {}
+                                    content = msg.get("content")
+                                    if content:
+                                        yield content
+                        except Exception:
+                            # 如果某些实现不是标准 JSON（极少数网关），直接忽略该行
+                            continue
+        except Exception as e:
+            yield f"\n【占位】OpenAI 流式调用失败：{e}\n请复制 prompt 手动到模型中生成。"
+            return
 
 class GeminiAdapter(LLMAdapter):
     def __init__(self, model: str = "gemini-2.0-pro"):
@@ -324,6 +415,8 @@ class GeminiAdapter(LLMAdapter):
             return j["candidates"][0]["content"]["parts"][0]["text"]
         except Exception as e:
             return f"【占位】Gemini 调用失败：{e}"
+    def generate_stream(self, prompt: str) -> str:
+        raise NotImplementedError
 
 class DoubaoAdapter(LLMAdapter):
     def __init__(self, model: str = "ep-20240601-doubao-pro"):
@@ -349,6 +442,8 @@ class DoubaoAdapter(LLMAdapter):
             return json.dumps(j, ensure_ascii=False)
         except Exception as e:
             return f"【占位】豆包调用失败：{e}"
+    def generate_stream(self, prompt: str) -> str:
+        raise NotImplementedError
 
 def pick_adapter(model_name: str) -> Optional[LLMAdapter]:
     m = (model_name or "none").lower()
@@ -449,8 +544,261 @@ def inject_images_into_sections(markdown_text: str, parsed: ParsedPaper) -> str:
             out = pat.sub(lambda m: m.group(1) + render_img_md(urls) + "\n\n", out, count=1)
     return out
 
+def deep_analysis_strem_run(
+    md_path: str,
+    out_dir: str,
+    model: str = "none",
+    use_websearch: bool = False,
+    search_provider: str = "bing",
+    adaptive: bool = True,
+    on_chunk: Optional[Callable[[str], None]] = None,   # 新增：接收每个流式片段的回调
+    flush_interval: float = 0.25                        # 新增：控制写盘/回调的最短间隔（秒）
+) -> Dict[str, str]:
+    """
+    读取 md -> 解析 -> 生成自适应 Prompt（或固定 Prompt）-> （可选）websearch 注入 -> 调用模型生成报告
+    - 若适配器支持流式：逐块写入 report_zh.md，并回调 on_chunk
+    - 若不支持流式：自动降级为一次性生成
+    - 结束后再执行 inject_images_into_sections 做最终排版插图
+    返回：
+      {
+        "prompt_path": <保存的 prompt 文件>,
+        "report_path": <最终报告文件>,
+        "content": <最终完整 Markdown 字符串>
+      }
+    """
+    os.makedirs(out_dir, exist_ok=True)
+
+    # 1) 读取源 markdown
+    with open(md_path, "r", encoding="utf-8", errors="ignore") as f:
+        md = f.read()
+
+    # 2) 解析结构
+    parsed = parse_markdown(md)
+
+    # 3) 生成 prompt
+    if adaptive:
+        prompt = generate_adaptive_prompt(parsed)
+        prompt_name = "prompt_adaptive_zh.txt"
+    else:
+        outline = "\n".join([f"- [{'#'*s.level} {s.title}]" for s in parsed.sections]) or "（未检测到章节标题）"
+        images  = build_image_inventory(parsed.images)
+        prompt = (
+            "你是一名资深学术研究员与技术评审专家。请对下面论文做“深度解读”，"
+            "输出**中文图文报告**（严格复用源 MD 的图片链接）。\n\n"
+            f"【标题】{parsed.title}\n"
+            f"【作者】{'；'.join(parsed.authors) if parsed.authors else '（未解析到作者）'}\n"
+            f"【摘要】{parsed.abstract}\n\n"
+            "【原文结构（截断展示）]\n"
+            f"{outline}\n\n"
+            "【图片清单（来自源 MD）]\n"
+            f"{images}\n"
+        )
+        prompt_name = "prompt_zh.txt"
+
+    # 4) （可选）WebSearch 增强
+    if use_websearch:
+        topics = [
+            f"{parsed.title} 复现",
+            "related work 2023..2025",
+            "ablation study methodology for this topic",
+        ]
+        prompt = weave_web_results_to_prompt(prompt, topics, provider=search_provider)
+
+    # 5) 保存 prompt
+    prompt_path = os.path.join(out_dir, prompt_name)
+    with open(prompt_path, "w", encoding="utf-8") as f:
+        f.write(prompt)
+
+    # 6) 选择 LLM 适配器
+    adapter = pick_adapter(model)
+
+    # 输出文件路径
+    report_tmp_path = os.path.join(out_dir, "report_zh.partial.md")  # 流式中间文件
+    report_path     = os.path.join(out_dir, "report_zh.md")          # 最终文件
+
+    def _emit(chunk: str):
+        """统一的片段回调：写 stdout 或用户自定义 on_chunk。"""
+        if on_chunk is not None:
+            try:
+                on_chunk(chunk)
+            except Exception:
+                # 回调失败不影响主流程
+                pass
+        else:
+            # 默认打印到 stdout（可被前端/日志采集）
+            sys.stdout.write(chunk)
+            sys.stdout.flush()
+
+    # 7) 调用模型：优先流式，自动降级
+    final_md: str = ""
+    try:
+        if adapter is None:
+            # 无模型 -> 直接骨架
+            final_md = build_report_skeleton(parsed)
+        else:
+            # 判断是否支持流式（duck typing）
+            has_stream = hasattr(adapter, "generate_stream") and callable(getattr(adapter, "generate_stream"))
+            if has_stream:
+                # --- 流式路径 ---
+                last_flush_t = 0.0
+                with open(report_tmp_path, "w", encoding="utf-8") as wf:
+                    # 某些适配器的 generate_stream 可能返回字符串（非迭代器），做一层兜底
+                    gen = adapter.generate_stream(prompt)
+                    if isinstance(gen, str):
+                        # 适配器误返回整段字符串，直接一次性写入
+                        wf.write(gen)
+                        _emit(gen)
+                    else:
+                        # 逐块写入
+                        for chunk in _safe_iter(gen):
+                            if not chunk:
+                                continue
+                            wf.write(chunk)
+                            # 限频 flush，避免频繁 I/O
+                            now = time.time()
+                            if now - last_flush_t >= flush_interval:
+                                wf.flush()
+                                last_flush_t = now
+                            _emit(chunk)
+                # 读回完整文本并做插图注入
+                with open(report_tmp_path, "r", encoding="utf-8") as rf:
+                    streamed_md = rf.read()
+                final_md = streamed_md.strip() or build_report_skeleton(parsed)
+            else:
+                # --- 非流式路径（一次性） ---
+                whole = adapter.generate(prompt)
+                final_md = (whole or "").strip() or build_report_skeleton(parsed)
+    except Exception as e:
+        # 模型失败 -> 切回骨架
+        _emit(f"\n【警告】LLM 生成失败：{e}，已回退到报告骨架。\n")
+        final_md = build_report_skeleton(parsed)
+
+    # 8) 统一在完成后做图片注入与清洗
+    try:
+        final_md = inject_images_into_sections(final_md, parsed)
+    except Exception as e:
+        _emit(f"\n【提示】注图阶段发生异常：{e}（已保留原文）。\n")
+
+    # 9) 覆盖写入最终文件，并清理临时文件
+    with open(report_path, "w", encoding="utf-8") as f:
+        f.write(final_md)
+    try:
+        if os.path.exists(report_tmp_path):
+            os.remove(report_tmp_path)
+    except Exception:
+        pass
+
+    return {
+        "prompt_path": prompt_path,
+        "report_path": report_path,
+        "content": final_md,
+    }
+
+
+# --- 小工具：安全迭代器，防止个别实现把非字符串对象塞进来 ---
+def _safe_iter(gen: Iterator) -> Iterator[str]:
+    for x in gen:
+        # 兼容某些实现返回 dict / bytes
+        if x is None:
+            continue
+        if isinstance(x, bytes):
+            try:
+                yield x.decode("utf-8", errors="ignore")
+            except Exception:
+                continue
+        elif isinstance(x, str):
+            yield x
+        else:
+            # 尝试从常见结构中获取字段
+            # 例如 OpenAI 兼容：{"choices":[{"delta":{"content":"..."}}]}
+            try:
+                import json
+                if isinstance(x, dict):
+                    d = x
+                else:
+                    d = json.loads(str(x))
+                choices = d.get("choices") or []
+                if choices:
+                    delta = choices[0].get("delta") or {}
+                    c = delta.get("content") or choices[0].get("message", {}).get("content")
+                    if isinstance(c, str):
+                        yield c
+                        continue
+            except Exception:
+                pass
+            # 其他兜底
+            yield str(x)
+
+def deep_analysis_run(md_text: str, out_dir: str, model: str="none", use_websearch: bool=False, search_provider: str="bing", adaptive: bool=True) -> Dict[str,str]:
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
+    # with open(md_path, "r", encoding="utf-8", errors="ignore") as f:
+    #     md = f.read()
+    parsed = parse_markdown(md_text)
+    if adaptive:
+        prompt = generate_adaptive_prompt(parsed)
+        prompt_name = "prompt_adaptive_zh.txt"
+    else:
+        # 简化版固定 Prompt（少用）
+        outline = "\n".join([f"- [{'#'*s.level} {s.title}]" for s in parsed.sections]) or "（未检测到章节标题）"
+        images  = build_image_inventory(parsed.images)
+        prompt = f"""你是一名资深学术研究员与技术评审专家。请对下面论文做“深度解读”，输出**中文图文报告**（严格复用源 MD 的图片链接）。
+
+【标题】{parsed.title}
+【作者】{"；".join(parsed.authors) if parsed.authors else "（未解析到作者）"}
+【摘要】{parsed.abstract}
+
+【原文结构（截断展示）】
+{outline}
+
+【图片清单（来自源 MD）】
+{images}
+"""
+        prompt_name = "prompt_zh.txt"
+
+    # WebSearch 增强（可选）
+    if use_websearch:
+        topics = [
+            f"{parsed.title} 复现",
+            "related work 2023..2025",
+            "ablation study methodology for this topic"
+        ]
+        prompt = weave_web_results_to_prompt(prompt, topics, provider=search_provider)
+
+    # 保存 prompt
+    prompt_path = os.path.join(out_dir, prompt_name)
+    with open(prompt_path, "w", encoding="utf-8") as f:
+        f.write(prompt)
+
+    # 调用模型或输出骨架
+    # report_path = os.path.join(out_dir, "report_zh.md")
+    adapter = pick_adapter(model)
+    if adapter is None:
+        content = build_report_skeleton(parsed)
+    else:
+        llm_md = adapter.generate(prompt)
+        content = llm_md if llm_md and llm_md.strip() else build_report_skeleton(parsed)
+        content = inject_images_into_sections(content, parsed)
+
+    # with open(report_path, "w", encoding="utf-8") as f:
+    #     f.write(content)
+    return content
+
+    # 另存解析结构
+    # meta_path = os.path.join(out_dir, "parsed_meta.json")
+    # with open(meta_path, "w", encoding="utf-8") as f:
+    #     json.dump({
+    #         "title": parsed.title,
+    #         "authors": parsed.authors,
+    #         "abstract": parsed.abstract[:1000],
+    #         "sections": [{"level": s.level, "title": s.title, "len": len(s.text), "images": [im.url for im in s.images]} for s in parsed.sections],
+    #         "images": [{"alt": im.alt, "url": im.url, "ctx": im.context_heading} for im in parsed.images]
+    #     }, f, ensure_ascii=False, indent=2)
+
+    # return {"prompt_path": prompt_path, "report_path": report_path, "meta_path": meta_path}
+
 # ------- 主流程 -------
-def run(md_path: str, out_dir: str, model: str="none", use_websearch: bool=False, search_provider: str="bing", adaptive: bool=True) -> Dict[str,str]:
+def deep_analysis_run_test(md_path: str, out_dir: str, model: str="none", use_websearch: bool=False, search_provider: str="bing", adaptive: bool=True) -> Dict[str,str]:
     os.makedirs(out_dir, exist_ok=True)
     with open(md_path, "r", encoding="utf-8", errors="ignore") as f:
         md = f.read()
@@ -492,7 +840,7 @@ def run(md_path: str, out_dir: str, model: str="none", use_websearch: bool=False
         f.write(prompt)
 
     # 调用模型或输出骨架
-    report_path = os.path.join(out_dir, "report_zh.md")
+    # report_path = os.path.join(out_dir, "report_zh.md")
     adapter = pick_adapter(model)
     if adapter is None:
         content = build_report_skeleton(parsed)
@@ -501,8 +849,8 @@ def run(md_path: str, out_dir: str, model: str="none", use_websearch: bool=False
         content = llm_md if llm_md and llm_md.strip() else build_report_skeleton(parsed)
         content = inject_images_into_sections(content, parsed)
 
-    with open(report_path, "w", encoding="utf-8") as f:
-        f.write(content)
+    # with open(report_path, "w", encoding="utf-8") as f:
+    #     f.write(content)
 
     # 另存解析结构
     meta_path = os.path.join(out_dir, "parsed_meta.json")

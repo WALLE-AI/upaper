@@ -17,7 +17,7 @@ from flask_cors import CORS
 def create_app(config_class: type[BaseConfig] | None = None) -> Flask:
     """Create and configure the Flask application."""
     app = Flask(__name__)
-    CORS(app, resources={r"/api/*": {"origins": "http://localhost:3000"}})
+    CORS(app, resources={r"/api/*": {"origins": "http://localhost:4173"}})
     app.config.from_object(config_class or BaseConfig())
 
     # Init extensions

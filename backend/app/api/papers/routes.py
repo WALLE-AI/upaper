@@ -257,11 +257,69 @@ def paper_translate():
 
 @bp.post("/interpret-stream")
 def paper_interpret():
+    # """
+    # Fetch the top huggingface daily papers for a given daily identifier and create new Paper entries.
+    # """
+    # print("interface success")
+    # return ok({"status": "ok"})
     """
-    Fetch the top huggingface daily papers for a given daily identifier and create new Paper entries.
+    流式返回论文标题/摘要的翻译文本。
+    前端示例：fetch(..., { body: JSON.stringify({ paper, targetLanguage }) })
+             -> response.body.getReader() 按块解码。
     """
-    print("interface success")
-    return ok({"status": "ok"})
+    try:
+        payload = request.get_json(force=True, silent=False)
+    except Exception:
+        return Response(
+            json.dumps({"error": "Invalid JSON body"}),
+            status=400,
+            mimetype="application/json",
+        )
+
+    if not isinstance(payload, dict):
+        return Response(
+            json.dumps({"error": "Request body must be a JSON object"}),
+            status=400,
+            mimetype="application/json",
+        )
+
+    paper = payload.get("paper") or {}
+    target_lang = payload.get("targetLanguage") or "zh"
+
+    if not isinstance(paper, dict):
+        return Response(
+            json.dumps({"error": "`paper` must be an object"}),
+            status=400,
+            mimetype="application/json",
+        )
+    # 可通过 query/body 控制是否强制使用 mock（便于联调）
+    try:
+        gen: Iterable[str]
+        gen = FileService._iter_real_deep_analysis(paper)
+
+        # 可选：设置心跳间隔（秒）。如后面有 nginx / cloudflare，可设 10~15s。
+        heartbeat_every = None  # 例如 15.0
+
+        resp = Response(
+            stream_with_context(FileService._as_plain_text_stream(gen, heartbeat_interval_s=heartbeat_every)),
+            # **与前端匹配**：纯文本流，而非 text/event-stream
+            mimetype="text/plain; charset=utf-8",
+        )
+        # 重要：禁用反向代理缓冲，确保“边生成边发送”
+        resp.headers["X-Accel-Buffering"] = "no"        # nginx
+        resp.headers["Cache-Control"] = "no-cache"
+        resp.headers["Connection"] = "keep-alive"
+        # CORS 如全局没配，这里可临时放开（按需收紧域名）
+        resp.headers.setdefault("Access-Control-Allow-Origin", "*")
+        return resp
+
+    except Exception as e:
+        print("translate-stream failed")
+        return Response(
+            json.dumps({"error": f"Internal error: {type(e).__name__}: {str(e)}"}),
+            status=500,
+            mimetype="application/json",
+        )
 
 
 

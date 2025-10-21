@@ -2,6 +2,9 @@ import os
 from pathlib import Path
 import re
 from typing import Optional
+
+from .deep_paper_report import IMAGE_RE, PaperImage
+from .deep_paper_report import deep_analysis_run, deep_analysis_strem_run
 from loguru import logger
 from playwright.sync_api import sync_playwright, Error as PlaywrightError
 
@@ -10,6 +13,7 @@ from .hf_papers_download_or_parser_to_oss import PaperFileDownloadAndParser
 from .md_bilingual import translate_markdown_file
 from ..db.ext_storage import storage
 import alibabacloud_oss_v2 as oss
+
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -29,6 +33,8 @@ cfg.credentials_provider = credentials_provider
 # 设置配置中的区域信息
 cfg.region = required_envs.get("ALIYUN_OSS_REGION")
 cfg.endpoint = required_envs.get("ALIYUN_OSS_ENDPOINT")
+# # 设置使用CNAME
+# cfg.use_cname = True
 
 # 使用配置好的信息创建OSS客户端
 client = oss.Client(cfg)
@@ -121,6 +127,68 @@ class FileDonwloader():
         print("pdf_file_root:",self.pdf_file_root)
         path = download_paper_by_id(paper_id=paper_id,pdf_file_root=self.pdf_file_root)
         return path
+    
+    def oss_images_url(key:str):
+        bucket=required_envs.get("ALIYUN_OSS_BUCKET_NAME")
+        if client.is_object_exist(
+            bucket=bucket,
+            key=key
+        ):
+            pre_result = client.presign(
+                oss.GetObjectRequest(
+                    bucket=bucket,  # 指定存储空间名称
+                    key=key,        # 指定对象键名
+                )
+            )
+            return pre_result.url
+        else:
+            logger.exception("{key} is no oss exist")
+    
+    
+    @staticmethod
+    def oss_dowload_deep_analysis_file(key:str,folder:str,is_local=False) -> Optional[str]:
+        bucket=required_envs.get("ALIYUN_OSS_BUCKET_NAME")
+        if client.is_object_exist(
+            bucket=bucket,
+            key=key
+        ):
+        # 执行获取对象的请求，指定存储空间名称和对象名称
+            result = client.get_object(oss.GetObjectRequest(
+                bucket=bucket,  # 指定存储空间名称
+                key=key,  # 指定对象键名
+            ))
+                # 输出获取对象的结果信息，用于检查请求是否成功
+            print(f'status code: {result.status_code},'
+                f' request id: {result.request_id},')
+            # ========== 方式1：完整读取 ==========
+            with result.body as body_stream:
+                data = body_stream.read()
+                print(f"文件读取完成，数据长度：{len(data)} bytes")
+                if is_local:
+                    if not os.path.exists(folder):
+                        os.makedirs(folder)
+                    with open(key, 'wb') as f:
+                        f.write(data)
+                    print(f"文件下载完成，保存至路径：{key}")
+                    return key
+                else:
+                    ##data 转 str
+                    if isinstance(data,bytes):
+                        data = bytes(int(b, 2) for b in data.strip().split())
+                    data = data.decode('utf-8')
+                    # imgs = [PaperImage(alt=a, url=u, context_heading=None) for a,u in IMAGE_RE.findall(data)]
+                    # import pdb
+                    # pdb.set_trace()
+                    # for image in imgs:
+                    #     image_key = folder+"/" +image.url
+                    #     image_url = FileDonwloader.oss_images_url(image_key)
+                    #     print(image_url)
+                    return data
+        else:
+            print(f"{key} is no exist")
+            return None
+    
+
     @staticmethod
     def oss_dowload_file(key:str,folder:str,is_local=False) -> Optional[str]:
         bucket=required_envs.get("ALIYUN_OSS_BUCKET_NAME")
@@ -149,31 +217,101 @@ class FileDonwloader():
                     return key
                 else:
                     ##data 转 str
+                    # if isinstance(data,bytes):
+                    #     data = bytes(int(b, 2) for b in data.strip().split())
                     data = data.decode('utf-8')
                     return data
         else:
             print(f"{key} is no exist")
             return None
+    @staticmethod
+    def upload_report_to_oss(md_text: str, key: str) -> Optional[str]:
+        """Upload the downloaded PDF to Aliyun OSS and return the object key when configured."""
+                
+        # 用于记录上传进度的字典
+        progress_state = {'saved': 0}
+
+        def _progress_fn(n, written, total):
+            progress_state['saved'] += n
+            rate = int(100 * (float(written) / float(total)))
+            print(f'\r上传进度：{rate}% ', end='')
+            
+        data = " ".join(format(b, "08b") for b in md_text.encode("utf-8"))
+        bucket=required_envs.get("ALIYUN_OSS_BUCKET_NAME")
+        if client.is_object_exist(
+            bucket=bucket,
+            key=key
+        ):
+            print(f'对象 {key} 已存在于存储空间 {required_envs.get("ALIYUN_OSS_BUCKET_NAME")} 中，跳过上传。')
+            return "对象已存在，跳过上传。"
+        else:
+            result = client.put_object(
+                oss.PutObjectRequest(
+                    bucket=bucket,  # 存储空间名称
+                    key=key,
+                    body=data,
+                    progress_fn=_progress_fn# 对象名称
+                )
+            )
+            print(f"\n上传成功，ETag: {result.etag}"
+            f"状态码: {result.status_code}, 请求ID: {result.request_id}"
+            )
+
+
+
         
-    #@staticmethod
-    # def donwload_translate_md_to_local(paper_id: str,is_local=False) -> Optional[str]:
-    #     folder = "hf_papers/"+paper_id
-    #     traslate_key = folder + f"/{paper_id}.bilingual.md"
-    #     key = folder + f"/{paper_id}.md"
-    #     import pdb
-    #     pdb.set_trace()
-    #     md_path = FileDonwloader.oss_dowload_file(key=traslate_key,folder=folder,is_local=is_local)
-    #     if not md_path:
-    #         md_path = FileDonwloader.oss_dowload_file(key=key,folder=folder,is_local=is_local)
-    #     elif not md_path:
-    #         trans_md = translate_markdown_file(paper_id=paper_id,md_text="None",is_local=False)
-    #     elif not trans_md:
-    #         key = folder + f"/{paper_id}.pdf"
-    #         pdf_data = FileDonwloader.oss_dowload_file(key=key,folder=folder,is_local=is_local)
-    #     elif not pdf_data:
-    #         data = PaperFileDownloadAndParser.parse(paper_id=paper_id)
-    #         return data['translated_markdown_content']
-    #     return md_path
+    @staticmethod
+    def download_deep_analysis_report_md_content(paper_id: str, is_local: bool = False):
+        """
+        目标：下载 paper 的 deep analysis report md 内容。
+        优先下载 {paper_id}_report.md 文件。
+        成功则返回内容（str），否则返回 None
+        """
+        folder   = f"hf_papers/{paper_id}"
+        key_report_md   = f"{folder}/{paper_id}_report.md"
+        key_md   = f"{folder}/{paper_id}.md"
+        out_bi   = Path(folder) / f"{paper_id}_report.md"  # 本地目标路径
+        
+        report_md_content = FileDonwloader.oss_dowload_deep_analysis_file(key=key_report_md, folder=folder, is_local=is_local)
+        if report_md_content:
+            return report_md_content
+        # 2) 再试普通 md
+        md_path = FileDonwloader.oss_dowload_file(key=key_md, folder=folder, is_local=is_local)
+        if md_path:
+            # 尝试把 md 解读 report（若失败则退回 md）
+            # md_text = None
+            # try:
+            #     md_text = Path(md_path).read_text(encoding="utf-8")
+            # except Exception:
+            #     pass
+            try:
+                report_path_or_content = deep_analysis_run(
+                    md_path,
+                    folder,
+                    "gpt",
+                    False,
+                    "sdsds",
+                    True
+                )
+                ##save to oss
+                FileDonwloader.upload_report_to_oss(md_text=report_path_or_content,key=key_report_md)
+                # 若翻译函数直接返回本地路径，优先用之
+                if isinstance(report_path_or_content, str) and Path(report_path_or_content).exists():
+                    return report_path_or_content
+                # 若返回的是内容，则落盘
+                if isinstance(report_path_or_content, str) and not Path(report_path_or_content).exists():
+                    Path(out_bi).parent.mkdir(parents=True, exist_ok=True)
+                    Path(out_bi).write_text(report_path_or_content, encoding="utf-8")
+                    return str(out_bi)
+            except Exception as e:
+                logger.error("download_deep_analysis_report_md_content:{}",e)
+
+            # 翻译失败，至少返回原 md
+            return md_path
+        
+        return None
+    
+        
     @staticmethod
     def donwload_translate_md_to_local(paper_id: str, is_local: bool = False) -> Optional[str]:
         """

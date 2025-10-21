@@ -163,6 +163,24 @@ class FileService:
         rem = decoder.decode(b"", final=True)
         if rem:
             yield rem
+            
+    @staticmethod
+    def _iter_real_deep_analysis(paper: Dict) -> Iterable[str]:
+        """
+        读取本地已翻译好的 xx.md 文件，并流式输出给前端。
+        - 默认从 ./data/translations/ 查找（可通过 current_app.config['TRANSLATIONS_DIR'] 改）
+        - 支持 paper['translated_path'] 指定文件（路径会进行安全校验）
+        - 逐块 bytes -> 增量 UTF-8 解码，避免多字节字符被截断
+        """
+        # 统一叫 md_source：可能是“路径”，也可能是“Markdown 字符串”
+        md_source = FileDonwloader.download_deep_analysis_report_md_content(paper_id=paper["id"])
+        if not md_source:
+            # 未拿到任何内容 → 退回 mock
+            yield from FileService._iter_mock_translation(paper, "English")
+            return
+
+        # 直接用统一的流式输出
+        yield from FileService._iter_stream_markdown(md_source)
         
     @staticmethod
     def _iter_real_translation(paper: Dict, target_lang: str, chunk_bytes: int = 4096) -> Iterable[str]:
