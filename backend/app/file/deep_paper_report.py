@@ -9,12 +9,15 @@ paper_deep_reader.py
 4) 严格复用源 MD 的图片 URL，在“方法/实验”小节就地内联；若模型未插图则自动补图
 """
 
+from pathlib import Path
 import os, re, json, argparse
 from dataclasses import dataclass, field
 import sys
 import time
 from typing import Iterator, List, Dict, Optional, Callable, Tuple
 from datetime import datetime
+
+from .image_upload_github import upload_image_to_github
 
 try:
     import requests
@@ -465,9 +468,25 @@ def choose_images_by_keyword(images: List[PaperImage], keywords: List[str], max_
         for im in images[:max_count]: picked.append(im.url)
     return picked
 
-def render_img_md(urls: List[str]) -> str:
+# def render_img_md(urls: List[str]) -> str:
+#     if not urls: return "（无）"
+#     return "\n".join([f"![]({u})" for u in urls])
+def render_img_md(urls: List[str],out_dir:str) -> str:
     if not urls: return "（无）"
-    return "\n".join([f"![]({u})" for u in urls])
+    urls_list = []
+    import asyncio
+    async def get_image_url(filename:str,image_path:str):
+        resp = await upload_image_to_github(
+            filename=filename,
+            image_path=image_path,  # 这里换成你的本地文件
+        )
+        return resp['download_url']
+    for u in urls:
+        if os.path.exists(os.path.join(out_dir,u)):
+            image_id = Path(u).name
+            url = asyncio.run(get_image_url(filename=image_id,image_path=os.path.join(out_dir,u)))
+            urls_list.append(f"![]({url})")
+    return "\n".join(urls_list)   
 
 REPORT_SKELETON_TMPL = """# {title} — 深度解读
 
@@ -529,7 +548,7 @@ def build_report_skeleton(parsed: ParsedPaper) -> str:
         all_imgs=all_imgs
     )
 
-def inject_images_into_sections(markdown_text: str, parsed: ParsedPaper) -> str:
+def inject_images_into_sections(markdown_text: str, parsed: ParsedPaper,out_dir:str) -> str:
     needles = {
         "方法": choose_images_by_keyword(parsed.images, ["overview","method","architecture","framework","模型","方法"], 3),
         "实验": choose_images_by_keyword(parsed.images, ["experiment","results","ablation","消融","性能","实验"], 3),
@@ -539,9 +558,9 @@ def inject_images_into_sections(markdown_text: str, parsed: ParsedPaper) -> str:
         if not urls: continue
         pat = re.compile(rf'(^##\s*[^\n]*{key}[^\n]*\n)', re.MULTILINE)
         if not pat.search(out):
-            out = f"{render_img_md(urls)}\n\n" + out
+            out = f"{render_img_md(urls,out_dir)}\n\n" + out
         else:
-            out = pat.sub(lambda m: m.group(1) + render_img_md(urls) + "\n\n", out, count=1)
+            out = pat.sub(lambda m: m.group(1) + render_img_md(urls,out_dir) + "\n\n", out, count=1)
     return out
 
 def deep_analysis_strem_run(
@@ -675,7 +694,7 @@ def deep_analysis_strem_run(
 
     # 8) 统一在完成后做图片注入与清洗
     try:
-        final_md = inject_images_into_sections(final_md, parsed)
+        final_md = inject_images_into_sections(final_md, parsed,out_dir)
     except Exception as e:
         _emit(f"\n【提示】注图阶段发生异常：{e}（已保留原文）。\n")
 
@@ -778,7 +797,7 @@ def deep_analysis_run(md_text: str, out_dir: str, model: str="none", use_websear
     else:
         llm_md = adapter.generate(prompt)
         content = llm_md if llm_md and llm_md.strip() else build_report_skeleton(parsed)
-        content = inject_images_into_sections(content, parsed)
+        content = inject_images_into_sections(content, parsed,out_dir)
 
     # with open(report_path, "w", encoding="utf-8") as f:
     #     f.write(content)
