@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 import re
-from typing import Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .deep_paper_report import IMAGE_RE, PaperImage
 from .deep_paper_report import deep_analysis_run, deep_analysis_strem_run
@@ -38,6 +38,123 @@ cfg.endpoint = required_envs.get("ALIYUN_OSS_ENDPOINT")
 
 # 使用配置好的信息创建OSS客户端
 client = oss.Client(cfg)
+
+
+
+IMG_PATTERN = re.compile(r'!\[(?P<alt>[^\]]*)\]\((?P<src>[^)]+)\)')
+HTML_IMG_PATTERN = re.compile(r'<img\s+[^>]*src=["\']([^"\']+)["\'][^>]*>', re.IGNORECASE)
+
+
+def is_external_or_html(src: str) -> bool:
+    """
+    True -> 不需要我们映射:
+    - http(s):// 开头
+    - 直接是 <img ...> 片段
+    """
+    s = src.strip().lower()
+    if s.startswith("http://") or s.startswith("https://"):
+        return True
+    if s.startswith("<img"):
+        return True
+    return False
+
+
+def extract_image_id(src: str) -> str:
+    """
+    从 Markdown 中的本地路径提取图片ID。
+    例: "images/abc123xyz.jpg" -> "abc123xyz"
+    """
+    filename_full = src.strip().split("/")[-1]
+    filename_full = filename_full.split("?")[0].split("#")[0]
+
+    if "." in filename_full:
+        image_id = ".".join(filename_full.split(".")[:-1])
+    else:
+        image_id = filename_full
+
+    return image_id
+
+
+def replace_md_image_links_auto(md_text: str,file_dir) -> Tuple[str, List[Dict[str, Any]]]:
+    """
+    核心处理函数:
+    1. 找出所有 ![](src)
+    2. 对本地图片用 image_id -> resolve_oss_url()
+    3. 生成替换后的 Markdown
+    4. 返回 (新Markdown文本, 替换日志列表)
+    """
+
+    replacements: List[Dict[str, Any]] = []
+    new_text_parts: List[str] = []
+
+    last_pos = 0
+
+    for match in IMG_PATTERN.finditer(md_text):
+        alt = match.group("alt")
+        old_src_raw = match.group("src")
+        old_src = old_src_raw.strip()
+        start_idx, end_idx = match.span()
+
+        # 先拼上前一段原文
+        new_text_parts.append(md_text[last_pos:start_idx])
+
+        # 缺省不动
+        new_src = old_src
+        replaced = False
+        skipped_reason = None
+        image_id_for_log = None
+
+        if is_external_or_html(old_src):
+            # 已经是公网/HTML，直接保留
+            skipped_reason = "already_external_or_html"
+            new_md_img = f"![{alt}]({new_src})"
+
+        else:
+            # 认为是本地路径 -> 提取 image_id
+            image_id = extract_image_id(old_src)
+            image_id_for_log = image_id
+
+            # 通过OSS拿到最终地址或HTML
+            resolved = FileDonwloader.oss_images_url(file_dir+"/"+old_src)
+
+            if resolved is None:
+                # OSS没返回，保持原样
+                skipped_reason = "oss_lookup_failed"
+                new_md_img = f"![{alt}]({new_src})"
+            else:
+                resolved_strip = resolved.strip()
+
+                if resolved_strip.lower().startswith("<img"):
+                    # OSS返回的是完整<img ...>，我们直接塞进去，而不是markdown语法
+                    new_md_img = resolved_strip
+                else:
+                    # OSS返回的是URL，继续沿用Markdown图片语法
+                    new_src = resolved_strip
+                    new_md_img = f"![{alt}]({new_src})"
+
+                replaced = True
+                skipped_reason = None
+
+        new_text_parts.append(new_md_img)
+
+        replacements.append({
+            "alt": alt,
+            "old_src": old_src,
+            "new_src": new_src,
+            "start_idx": start_idx,
+            "end_idx": end_idx,
+            "replaced": replaced,
+            "skipped_reason": skipped_reason,
+            "image_id": image_id_for_log,
+        })
+
+        last_pos = end_idx
+
+    # 拼上剩余尾部
+    new_text_parts.append(md_text[last_pos:])
+    new_text = "".join(new_text_parts)
+
+    return new_text, replacements
 
 def download_paper_by_id(paper_id: str, pdf_file_root) -> None:
     """
@@ -117,6 +234,9 @@ def download_paper_by_id(paper_id: str, pdf_file_root) -> None:
     except PlaywrightError as e:
         # 让上层知道失败原因
         raise RuntimeError(f"Playwright 下载失败: {e}") from e
+    
+    
+
 
 
 class FileDonwloader():
@@ -127,7 +247,7 @@ class FileDonwloader():
         print("pdf_file_root:",self.pdf_file_root)
         path = download_paper_by_id(paper_id=paper_id,pdf_file_root=self.pdf_file_root)
         return path
-    
+    @staticmethod
     def oss_images_url(key:str):
         bucket=required_envs.get("ALIYUN_OSS_BUCKET_NAME")
         if client.is_object_exist(
@@ -177,12 +297,11 @@ class FileDonwloader():
                         data = bytes(int(b, 2) for b in data.strip().split())
                     data = data.decode('utf-8')
                     # imgs = [PaperImage(alt=a, url=u, context_heading=None) for a,u in IMAGE_RE.findall(data)]
-                    # import pdb
-                    # pdb.set_trace()
                     # for image in imgs:
                     #     image_key = folder+"/" +image.url
                     #     image_url = FileDonwloader.oss_images_url(image_key)
                     #     print(image_url)
+                    data,_ = replace_md_image_links_auto(md_text=data,file_dir=folder)
                     return data
         else:
             print(f"{key} is no exist")
@@ -220,6 +339,7 @@ class FileDonwloader():
                     # if isinstance(data,bytes):
                     #     data = bytes(int(b, 2) for b in data.strip().split())
                     data = data.decode('utf-8')
+                    data,_ = replace_md_image_links_auto(md_text=data,file_dir=folder)
                     return data
         else:
             print(f"{key} is no exist")
