@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<meta charset="utf-8" />
+<title>OSS PDF 预览（代理稳过版）</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  html,body{height:100%;margin:0;font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial}
+  .bar{display:flex;gap:.5rem;align-items:center;padding:.5rem;background:#f6f7f9;border-bottom:1px solid #e5e7eb}
+  .bar input{flex:1;padding:.5rem;border:1px solid #ddd;border-radius:.5rem}
+  .bar button{padding:.45rem .8rem;border:0;border-radius:.5rem;background:#111827;color:#fff;cursor:pointer}
+  .wrap{height:calc(100% - 56px)}
+  iframe{width:100%;height:100%;border:0}
+  details{padding:.5rem 1rem;border-top:1px dashed #e5e7eb}
+</style>
+<body>
+  <div class="bar">
+    <input id="oss" placeholder="粘贴你的 OSS 签名链接" value="https://papersdata.oss-cn-beijing.aliyuncs.com/hf_papers/2511.02778/2511.02778.pdf?Expires=1762398291&OSSAccessKeyId=TMP.3KmB2FyohxZxBd9F4NX1it3bASL4QLuPkxmWyaWvnuDef9iWUWZMuYRsLt9GNmmJKBEBdf4PGjfifZKC8kcewBUAfV1Rmq&Signature=gExPWUBa%2BMmmvGzSAVN9eP12Sj8%3D">
+    <button id="btn">加载</button>
+    <label><input type="checkbox" id="simple"> 使用简单 iframe（兜底）</label>
+  </div>
+
+  <div class="wrap"><iframe id="viewer" allow="fullscreen" referrerpolicy="no-referrer"></iframe></div>
+
+  <details>
+    <summary>如果打不开，按此顺序排查</summary>
+    <ol>
+      <li>确认本地代理运行在 <code>http://127.0.0.1:3000</code>（或你自定义端口）。</li>
+      <li>若签名过期（URL 带 <code>Expires=</code>），请重新生成新链接。</li>
+      <li>切换勾选 “使用简单 iframe（兜底）”，该模式最不受限。</li>
+    </ol>
+  </details>
+
+  <script>
+    const viewer = document.getElementById("viewer");
+    const input = document.getElementById("oss");
+    const simple = document.getElementById("simple");
+    const VIEWER = "https://mozilla.github.io/pdf.js/web/viewer.html"; // 官方托管
+
+    function load() {
+      const oss = input.value.trim();
+      const proxied = `http://127.0.0.1:3005/pdf?url=${encodeURIComponent(oss)}`;
+      if (simple.checked) {
+        // 兜底：不经 pdf.js，直接嵌 PDF
+        viewer.src = proxied;
+      } else {
+        // 全功能 viewer：file 指向我们本地同源代理地址
+        viewer.src = `${VIEWER}?file=${encodeURIComponent(proxied)}`;
+      }
+    }
+    document.getElementById("btn").onclick = load;
+    load(); // 首次自动加载
+  </script>
+</body>
+</html>

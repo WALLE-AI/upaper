@@ -3,6 +3,8 @@ import base64
 from pathlib import Path
 import re
 from typing import Dict, Any, Optional
+
+from .pdf_parser import pdf_parser_run
 from ..db.repositories.paper_repo_supabase import PaperRepositorySupabase
 from loguru import logger
 import requests
@@ -299,7 +301,33 @@ def donwload_md_to_local(paper_id: str,is_local=False) -> Optional[str]:
                 return data
     else:
         print(f"{key} is no exist")
-
+        
+def upload_translate_file_to_oss(md_text,key):
+    # 用于记录上传进度的字典
+    progress_state = {'saved': 0}
+    def _progress_fn(n, written, total):
+        progress_state['saved'] += n
+        rate = int(100 * (float(written) / float(total)))
+        print(f'\r上传进度：{rate}% ', end='')
+    key   = key # 本地目标路径
+    bucket=required_envs.get("ALIYUN_OSS_BUCKET_NAME")
+    if client.is_object_exist(
+        bucket=bucket,
+        key=key
+    ):
+        print(f'对象 {key} 已存在于存储空间 {required_envs.get("ALIYUN_OSS_BUCKET_NAME")} 中，跳过上传。')
+        return "对象已存在，跳过上传。"
+    else:
+        data = md_text.encode('utf-8') 
+        result = client.put_object(oss.PutObjectRequest(
+            bucket=bucket,
+            key=key,
+            body=data,
+            progress_fn=_progress_fn# 对象名称
+        ))
+        print(f"\n{Path(key).name}上传成功，ETag: {result.etag}"
+        f"{Path(key).name}状态码: {result.status_code}, 请求ID: {result.request_id}"
+    )
 
 def upload_pdf_to_oss(file_path: str, paper_id: str) -> Optional[str]:
     """Upload the downloaded PDF to Aliyun OSS and return the object key when configured."""
@@ -395,9 +423,9 @@ class PaperFileDownloadAndParser:
     
     @staticmethod
     def parse(paper_id: str) -> Dict[str, Any]:
-        pdf_file_root =os.getenv("STORAGE_LOCAL_PATH",'hf_papers')
+        pdf_file_root =os.getenv("STORAGE_LOCAL_PATH",'hf_papers/')
         path, pid_dir = download_paper_by_id(paper_id, pdf_file_root)
-        md_content = parse_pdf(file_path=path, file_name_dir=pid_dir)
+        md_content = pdf_parser_run(file_path=path, output_dir=pdf_file_root)
         if md_content:
             trans_md = translate_markdown_file(paper_id=paper_id,md_text=md_content,is_local=True)
         upload_pdf_to_oss(pid_dir, paper_id)

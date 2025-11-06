@@ -8,7 +8,7 @@ from .deep_paper_report import deep_analysis_run, deep_analysis_strem_run
 from loguru import logger
 from playwright.sync_api import sync_playwright, Error as PlaywrightError
 
-from .hf_papers_download_or_parser_to_oss import PaperFileDownloadAndParser
+from .hf_papers_download_or_parser_to_oss import PaperFileDownloadAndParser, upload_translate_file_to_oss
 
 from .md_bilingual import translate_markdown_file
 from ..db.ext_storage import storage
@@ -457,18 +457,20 @@ class FileDonwloader():
         md_path = FileDonwloader.oss_dowload_file(key=key_md, folder=folder, is_local=is_local)
         if md_path:
             # 尝试把 md 翻译成 bilingual（若失败则退回 md）
-            md_text = None
-            try:
-                md_text = Path(md_path).read_text(encoding="utf-8")
-            except Exception:
-                pass
+            # md_text = None
+            # try:
+            #     md_text = Path(md_path).read_text(encoding="utf-8")
+            # except Exception:
+            #     pass
 
             try:
                 trans_path_or_content = translate_markdown_file(
                     paper_id=paper_id,
-                    md_text=md_text if md_text is not None else "None",
+                    md_text=md_path if md_path is not None else "None",
                     is_local=is_local,
                 )
+                ##oss上传
+                upload_translate_file_to_oss(trans_path_or_content,out_bi.as_posix())
                 # 若翻译函数直接返回本地路径，优先用之
                 if isinstance(trans_path_or_content, str) and Path(trans_path_or_content).exists():
                     return trans_path_or_content
